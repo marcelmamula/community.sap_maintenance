@@ -133,7 +133,7 @@
 
 # hdbuserstore key takes priority, then fall back on username and password.
 - name: Block for user activation
-  when: sap_patching_hdb_server_activate_system_user | d(true)
+  when: sap_patching_hdb_server_activate_system_user
   block:
 
     - name: SAP Patching - Validation - HDB Server - Assert that the variable 'sap_patching_hdb_server_activate_admin_userstore_key' is valid
@@ -180,15 +180,35 @@
       The variable 'sap_patching_hdb_server_is_clustered' is undefined or invalid.
       It should be a boolean (true/false) indicating if the database is clustered (Redhat/Suse with Pacemaker).
 
-- name: SAP Patching - Validation - HDB Server - Assert that the variable 'sap_patching_hdb_server_cluster_hdb_resource_name' is defined as non-empty string
+- name: SAP Patching - Validation - HDB Server - Assert that the variable 'sap_patching_hdb_server_cluster_saphana_clone_name' is defined as non-empty string
   ansible.builtin.assert:
     that:
-      - sap_patching_hdb_server_cluster_hdb_resource_name is defined
-      - sap_patching_hdb_server_cluster_hdb_resource_name is string
-      - sap_patching_hdb_server_cluster_hdb_resource_name | length > 0
+      - sap_patching_hdb_server_cluster_saphana_clone_name is defined
+      - sap_patching_hdb_server_cluster_saphana_clone_name is string
+      - sap_patching_hdb_server_cluster_saphana_clone_name | length > 0
     fail_msg: |
-      The variable 'sap_patching_hdb_server_cluster_hdb_resource_name' is undefined, empty, or invalid.
+      The variable 'sap_patching_hdb_server_cluster_saphana_clone_name' is undefined, empty, or invalid.
       It should be the name of the cluster resource for HDB server (used to relocate and put the resource in maintenance mode).
+
+      Examples for SID 'H01' and instance number '90':
+      - Clone for 'SAPHanaController' resource agent in SAPHanaSR-angi cluster.
+        - SUSE: 'mst_SAPHanaCon_H01_HDB90'
+        - Red Hat: 'cln_SAPHanaCon_H01_HDB90'
+      - Clone for 'SAPHana' resource agent in SAPHanaSR classic cluster.
+        - SUSE: 'mls_SAPHana_H01_HDB90'
+        - Red Hat: 'cln_SAPHana_H01_HDB90'
+  when: sap_patching_hdb_server_is_clustered | bool
+
+- name: SAP Patching - Validation - HDB Server - Assert that the variable 'sap_patching_hdb_server_cluster_relocate_timeout' is defined as number greater than 0
+  ansible.builtin.assert:
+    that:
+      - sap_patching_hdb_server_cluster_relocate_timeout is defined
+      - sap_patching_hdb_server_cluster_relocate_timeout is number
+      - sap_patching_hdb_server_cluster_relocate_timeout > 0
+    fail_msg: |
+      The variable 'sap_patching_hdb_server_cluster_relocate_timeout' is undefined or invalid.
+      It should be a positive integer (in seconds) greater than 0, indicating how long the takeover
+      of the patched site can take, which depends on the time the database needs to stop and start.
   when: sap_patching_hdb_server_is_clustered | bool
 
 

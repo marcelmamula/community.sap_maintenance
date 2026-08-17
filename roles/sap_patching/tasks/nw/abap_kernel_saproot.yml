@@ -6,7 +6,6 @@
 
 - name: SAP Patching - Kernel - Saproot - Execute shared tasks for kernel saproot
   ansible.builtin.include_tasks:
-    file: shared_kernel_saproot.yml
+    file: common/shared_kernel_saproot.yml
   vars:
     __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid | upper }}"
-    __sap_patching_fact_sidadm_user: "{{ sap_patching_sap_system_sid | lower }}adm"

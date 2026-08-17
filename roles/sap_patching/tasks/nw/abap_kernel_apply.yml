@@ -2,7 +2,6 @@
 ---
 
 # Facts are set here for improved readability, instead of combining all this logic into one jinja2 block.
-
 # Prepare the path to kernel to apply, based on the following logic:
 # 1. If the prepare task was executed, use the prepared kernel path.
 # 2. If the user did not specify a kernel to apply, use the default symlink path.
@@ -35,7 +34,7 @@
 
 - name: SAP Patching - Kernel - Apply - Execute shared tasks for kernel apply
   ansible.builtin.include_tasks:
-    file: shared_kernel_apply.yml
+    file: common/shared_kernel_apply.yml
   vars:
     __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid | upper }}"
     __sap_patching_fact_sidadm_user: "{{ sap_patching_sap_system_sid | lower }}adm"
@@ -44,3 +43,18 @@
 
     # Global exe directory is shared among the ABAP hosts, so it is patched on the primary host only.
     __sap_patching_fact_kernel_apply_once: true
+
+
+- name: SAP Patching - Kernel - Apply - Inform that the restart step is not part of the execution plan
+  ansible.builtin.debug:
+    msg: |
+      INFO: Step 'abap_kernel_apply' was completed, but the step 'abap_kernel_restart'
+      is not part of the current execution plan.
+      The kernel files were copied to the global exe directory: {{ __sap_patching_fact_kernel_global_exe }}
+
+      The running SAP processes keep using the previous kernel until the instances are restarted,
+      either by the step 'abap_kernel_restart' or manually during a maintenance window.
+  when:
+    - "'abap_kernel_restart' not in sap_patching_execution_plan"
+    - __sap_patching_fact_kernel_installed | d(false)
+    - inventory_hostname == __sap_patching_fact_kernel_primary_host

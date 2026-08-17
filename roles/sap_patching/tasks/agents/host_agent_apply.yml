@@ -21,7 +21,6 @@
 
 
 # Facts are set here for improved readability, instead of combining all this logic into one jinja2 block.
-
 # Prepare the path to host agent to apply, based on the following logic:
 # 1. If the prepare task was executed, use the prepared host agent path.
 # 2. If the user did not specify a host agent to apply, use the default symlink path.
@@ -66,7 +65,7 @@
       and the variable 'sap_patching_host_agent_to_apply' is set correctly.
   when: not __sap_patching_register_host_agent_to_apply_stat.stat.exists
           or not (__sap_patching_register_host_agent_to_apply_stat.stat.isdir
-            or __sap_patching_register_host_agent_to_apply_stat.stat.islnk)
+          or __sap_patching_register_host_agent_to_apply_stat.stat.islnk)
 
 - name: SAP Patching - Host Agent - Apply - Check the content of '{{ __sap_patching_fact_host_agent_to_apply }}'
   ansible.builtin.find:
@@ -86,7 +85,7 @@
   # run_once cannot be used because host agent is configured locally and SAP Note does not require shared storage for 'DIR_NEW'.
   when: __sap_patching_params.update_mode == 'auto'
   block:
-    - name: SAP Patching - Host Agent - Apply - Stat the directory {{ sap_patching_host_agent_autoupdate_path ~ '/.upgrading' }}
+    - name: SAP Patching - Host Agent - Apply - Stat the directory {{ sap_patching_host_agent_autoupdate_path | d('') ~ '/.upgrading' }}
       ansible.builtin.stat:
         path: "{{ sap_patching_host_agent_autoupdate_path }}/.upgrading"
       register: __sap_patching_register_host_agent_autoupdate_upgrading_stat
@@ -107,11 +106,12 @@
         group: "{{ sap_patching_file_group }}"
         mode: '0644'
 
+    # TODO: Candidate for actual detection instead of just waiting for 30 seconds.
     - name: SAP Patching - Host Agent - Apply - Wait for 30 seconds to give any running host agent autoupdates chance to finish
       ansible.builtin.wait_for:
         timeout: 30
 
-    - name: SAP Patching - Host Agent - Apply - Copy host agent files to the update directory ({{ sap_patching_host_agent_autoupdate_path }})
+    - name: SAP Patching - Host Agent - Apply - Copy host agent files to the update directory defined in sap_patching_host_agent_autoupdate_path
       ansible.builtin.copy:
         src: "{{ __sap_patching_fact_host_agent_to_apply }}/"
         dest: "{{ sap_patching_host_agent_autoupdate_path }}"
@@ -139,12 +139,13 @@
       become_user: root
       register: __sap_patching_register_host_agent_manual_upgrade_result
       changed_when: __sap_patching_register_host_agent_manual_upgrade_result.rc == 0
+      failed_when: false  # Fail is handled in the next task to provide more information.
 
-    - name: SAP Patching - Host Agent - Apply - Fail if the upgrading directory exists
+    - name: SAP Patching - Host Agent - Apply - Fail if the 'saphostexec -upgrade' command failed
       ansible.builtin.fail:
         msg: |
           FAIL: The command 'saphostexec -upgrade' has failed!
-          Return code: {{ __sap_patching_register_host_agent_manual_upgrade_result.rc }}.
+          Return code: {{ __sap_patching_register_host_agent_manual_upgrade_result.rc | d('none') }}.
           The error message was: {{ __sap_patching_register_host_agent_manual_upgrade_result.stderr | d('') }}
           Stdout: {{ __sap_patching_register_host_agent_manual_upgrade_result.stdout | d('') }}
-      when: __sap_patching_register_host_agent_manual_upgrade_result.rc != 0
+      when: __sap_patching_register_host_agent_manual_upgrade_result.rc | d(1) != 0

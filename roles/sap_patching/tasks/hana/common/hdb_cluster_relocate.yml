@@ -1,0 +1,219 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Relocation of the SAP HANA cluster resource, executed once per run after the first patched site.
+# The site which was just patched takes over and the site which was the primary until now is demoted,
+# so the remaining sites are patched as secondary sites and no takeover is needed for them.
+#
+# Relocation is orchestrated list of steps:
+# 1. Move the clone resource and wait until the takeover is completed on the patched site.
+#
+# 2. Clear the relocation constraints of the clone resource on the patched site.
+#    NOTE: Clearing the constraints before the takeover is completed cancels the promotion of the other node.
+#
+# 3. Wait until the demoted site is registered as a secondary site on the new primary site.
+#    NOTE: Result of this task depends on the property 'AUTOMATED_REGISTER' of the clone resource.
+#    'AUTOMATED_REGISTER=True' registers the demoted site as a secondary site automatically.
+#    'AUTOMATED_REGISTER=False' does not register the demoted site and HANA resource will remain stopped.
+#
+# 4. Register the demoted site to the new primary site, if the cluster does not do it automatically.
+#    NOTE: Required only for the clone resource with 'AUTOMATED_REGISTER=False'.
+#
+# 5. Cleanup the failed resources of the demoted site, caused by 'AUTOMATED_REGISTER=False'.
+#
+# Input variables, set with 'vars' of the including task, so that they are gone after the include:
+#   __sap_patching_hdb_relocate_promoted_site - site which was patched and which takes over
+#   __sap_patching_hdb_relocate_promoted_host - FQDN of the host of that site
+#   __sap_patching_hdb_relocate_demoted_site  - site which is the primary until the takeover
+#   __sap_patching_hdb_relocate_demoted_host  - FQDN of the host of that site
+
+
+# Simple wait task after maintenance mode was disabled.
+# TODO: Implement proper wait for the resource to be online.
+- name: SAP Patching - HDB Server - Apply - Cluster - Wait 60 seconds for HANADB clone resource to stabilize
+  ansible.builtin.wait_for:
+    timeout: 60
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Move the clone resource to the patched site
+  ansible.builtin.command:
+    cmd: "{{ __sap_patching_hdb_cluster_cmd[ansible_facts['os_family']]['move'] }}"
+  become: true
+  delegate_to: "{{ __sap_patching_hdb_relocate_promoted_host }}"
+  register: __sap_patching_register_hdb_cluster_move_output
+  changed_when: __sap_patching_register_hdb_cluster_move_output.rc == 0
+  failed_when: false  # Fail is handled in the next task using 'rc' instead of default 'failed'.
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Fail if the move of the cluster resource has failed
+  ansible.builtin.fail:
+    msg: |
+      FAIL: Move of the clone resource '{{ sap_patching_hdb_server_cluster_saphana_clone_name }}' has failed.
+      Command executed: {{ __sap_patching_register_hdb_cluster_move_output.cmd | d('') }}
+      Stdout: {{ __sap_patching_register_hdb_cluster_move_output.stdout | d('') }}
+      Stderr: {{ __sap_patching_register_hdb_cluster_move_output.stderr | d('') }}
+  when:
+    - "'failed' in __sap_patching_register_hdb_cluster_move_output.stderr | d('')
+      or __sap_patching_register_hdb_cluster_move_output.rc | d(1) != 0"
+
+
+# The takeover stops and starts the database, so it takes as long as the database needs for it.
+- name: SAP Patching - HDB Server - Apply - Cluster - Wait until the patched site takes over as the primary site
+  ansible.builtin.shell:
+    cmd: >-
+      source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
+      {{ sap_patching_hdb_server_install_path }}/hdbnsutil
+      -sr_state
+      -sapcontrol=1
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ __sap_patching_hdb_relocate_promoted_host }}"
+  become: true
+  become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+  register: __sap_patching_register_hdb_relocate_promoted
+  retries: "{{ (sap_patching_hdb_server_cluster_relocate_timeout | int / 30) | round(0, 'ceil') | int }}"
+  delay: 30
+  until: "'mode=primary' in __sap_patching_register_hdb_relocate_promoted.stdout"
+  changed_when: false
+  failed_when: false  # Failed output is also parsed for information, so it is not a failure of the task itself.
+
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Clear the relocation constraints of the clone resource
+  ansible.builtin.command:
+    cmd: "{{ __sap_patching_hdb_cluster_cmd[ansible_facts['os_family']]['clear'] }}"
+  become: true
+  delegate_to: "{{ __sap_patching_hdb_relocate_promoted_host }}"
+  register: __sap_patching_register_hdb_cluster_clear_output
+  changed_when: __sap_patching_register_hdb_cluster_clear_output.rc == 0
+  failed_when: false  # Fail is handled in the next task using 'rc' instead of default 'failed'.
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Fail if clearing of the relocation constraints has failed
+  ansible.builtin.fail:
+    msg: |
+      FAIL: Clearing of the relocation constraints of the clone resource
+      '{{ sap_patching_hdb_server_cluster_saphana_clone_name }}' has failed.
+      Command executed: {{ __sap_patching_register_hdb_cluster_clear_output.cmd | d('') }}
+      Stdout: {{ __sap_patching_register_hdb_cluster_clear_output.stdout | d('') }}
+      Stderr: {{ __sap_patching_register_hdb_cluster_clear_output.stderr | d('') }}
+  when:
+    - "'failed' in __sap_patching_register_hdb_cluster_clear_output.stderr | d('')
+      or __sap_patching_register_hdb_cluster_clear_output.rc | d(1) != 0"
+
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Report that no takeover happened
+  ansible.builtin.debug:
+    msg: |
+      INFO: The site '{{ __sap_patching_hdb_relocate_promoted_site }}' did not take over within
+      {{ sap_patching_hdb_server_cluster_relocate_timeout }} seconds, so the site
+      '{{ __sap_patching_hdb_relocate_demoted_site }}' is still the primary site.
+      The remaining sites are patched with the roles which the sites have now.
+  when: "'mode=primary' not in __sap_patching_register_hdb_relocate_promoted.stdout"
+
+
+- name: Block to repair the replication of the demoted primary site after the takeover
+  when: "'mode=primary' in __sap_patching_register_hdb_relocate_promoted.stdout"
+  block:
+    # The demoted site is reported as a primary site only while the takeover is running, unless the
+    # cluster does not register it again. Two minutes are enough, because a cluster with
+    # 'AUTOMATED_REGISTER=True' registers the site within one monitor interval of its resource,
+    # and waiting longer only delays the registration which is done here for the other case.
+    - name: SAP Patching - HDB Server - Apply - Cluster - Wait until the demoted site is registered as a secondary site
+      ansible.builtin.shell:
+        cmd: >-
+          source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
+          {{ sap_patching_hdb_server_install_path }}/hdbnsutil
+          -sr_state
+          -sapcontrol=1
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ __sap_patching_hdb_relocate_demoted_host }}"
+      become: true
+      become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+      register: __sap_patching_register_hdb_relocate_demoted
+      retries: 4
+      delay: 30
+      until: "'mode=primary' not in __sap_patching_register_hdb_relocate_demoted.stdout"
+      changed_when: false
+      failed_when: false  # Failed output is also parsed for information, so it is not a failure of the task itself.
+
+    # Registration parameters of the demoted site are known from the state recorded before the
+    # patching started, because they cannot be read from a site which lost its replication.
+    - name: Block to register the demoted primary site at the site which took over
+      vars:
+        __sap_patching_hdb_relocate_registration: >-
+          {{ (__sap_patching_fact_hdb_hsr_initial_registration | d({}))[__sap_patching_hdb_relocate_demoted_site] | d({}) }}
+      when:
+        - "'mode=primary' in __sap_patching_register_hdb_relocate_demoted.stdout"
+        - __sap_patching_hdb_relocate_registration | length > 0
+      block:
+        # '--online' is not used, because the resource of the demoted site failed and is stopped.
+        - name: SAP Patching - HDB Server - Apply - Cluster - Register the demoted primary site at the new primary site
+          ansible.builtin.shell:
+            cmd: >-
+              source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
+              {{ sap_patching_hdb_server_install_path }}/hdbnsutil
+              -sr_register
+              --name={{ __sap_patching_hdb_relocate_demoted_site }}
+              --remoteHost={{ __sap_patching_hdb_relocate_promoted_host | split('.') | first }}
+              --remoteInstance={{ __sap_patching_hdb_relocate_registration.remote_instance }}
+              --replicationMode={{ __sap_patching_hdb_relocate_registration.replication_mode }}
+              --operationMode={{ __sap_patching_hdb_relocate_registration.operation_mode }}
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ __sap_patching_hdb_relocate_demoted_host }}"
+          become: true
+          become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+          register: __sap_patching_register_hdb_relocate_register
+          changed_when: __sap_patching_register_hdb_relocate_register.rc == 0
+          failed_when: __sap_patching_register_hdb_relocate_register.rc != 0
+
+        # The resource of the demoted site failed while it was a second primary, so the cluster
+        # starts it again only after its failed actions are cleaned up.
+        - name: SAP Patching - HDB Server - Apply - Cluster - Clean up the failed actions of the clone resource
+          ansible.builtin.command:
+            cmd: "{{ __sap_patching_hdb_cluster_cmd[ansible_facts['os_family']]['cleanup'] }}"
+          become: true
+          delegate_to: "{{ __sap_patching_hdb_relocate_demoted_host }}"
+          register: __sap_patching_register_hdb_cluster_cleanup_output
+          changed_when: __sap_patching_register_hdb_cluster_cleanup_output.rc == 0
+          failed_when: false  # Fail is handled in the next task using 'rc' instead of default 'failed'.
+
+        - name: SAP Patching - HDB Server - Apply - Cluster - Fail if the cleanup of the cluster resource has failed
+          ansible.builtin.fail:
+            msg: |
+              FAIL: Cleanup of the clone resource '{{ sap_patching_hdb_server_cluster_saphana_clone_name }}' has failed.
+              Command executed: {{ __sap_patching_register_hdb_cluster_cleanup_output.cmd | d('') }}
+              Stdout: {{ __sap_patching_register_hdb_cluster_cleanup_output.stdout | d('') }}
+              Stderr: {{ __sap_patching_register_hdb_cluster_cleanup_output.stderr | d('') }}
+          when:
+            - "'failed' in __sap_patching_register_hdb_cluster_cleanup_output.stderr | d('')
+              or __sap_patching_register_hdb_cluster_cleanup_output.rc | d(1) != 0"
+
+        - name: SAP Patching - HDB Server - Apply - Cluster - Wait until the cluster starts the registered site
+          ansible.builtin.shell:
+            cmd: >-
+              source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
+              {{ sap_patching_hdb_server_install_path }}/hdbnsutil
+              -sr_state
+              -sapcontrol=1
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ __sap_patching_hdb_relocate_demoted_host }}"
+          become: true
+          become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+          register: __sap_patching_register_hdb_relocate_registered
+          retries: 30
+          delay: 20
+          until: "'online=true' in __sap_patching_register_hdb_relocate_registered.stdout"
+          changed_when: false
+
+    # Only the site which took over reports the replication state of all other sites.
+    - name: SAP Patching - HDB Server - Apply - Cluster - Wait until the replication is active on the new primary site
+      ansible.builtin.include_tasks:
+        file: hdb_hsr_status.yml
+      vars:
+        __sap_patching_hsr_status_host: "{{ __sap_patching_hdb_relocate_promoted_host }}"
+        __sap_patching_hsr_status_ok_rc: [15]
+
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Mark that the relocation was already completed
+  ansible.builtin.set_fact:
+    __sap_patching_fact_hdb_cluster_relocated: true

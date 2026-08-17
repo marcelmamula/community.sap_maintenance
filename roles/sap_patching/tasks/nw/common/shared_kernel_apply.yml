@@ -14,9 +14,7 @@
     file: shared_kernel_detect.yml
 
 
-# Reported once, because every host in play builds the identical list of hosts with the kernel installed.
-# Evaluating 'when' on the first host only is therefore safe, even though it is combined with 'run_once'.
-# This is only a warning, so that other plan steps (e.g. 'hdb_server_apply') can still be executed.
+# Warning with 'run_once', because all hosts in the play have same fact set.
 - name: SAP Patching - Kernel - Apply - Warning if the kernel is not installed on any host in play
   ansible.builtin.debug:
     msg: |
@@ -75,9 +73,9 @@
           {% endif %}
       when: not __sap_patching_register_kernel_to_apply_stat.stat.exists
               or not (__sap_patching_register_kernel_to_apply_stat.stat.isdir
-                or __sap_patching_register_kernel_to_apply_stat.stat.islnk)
+              or __sap_patching_register_kernel_to_apply_stat.stat.islnk)
 
-    - name: SAP Patching - Kernel - Apply - Check the content of '{{ __sap_patching_fact_kernel_to_apply }}'
+    - name: SAP Patching - Kernel - Apply - Check the content of '{{ __sap_patching_fact_kernel_to_apply | d('') }}'
       ansible.builtin.find:
         paths: "{{ __sap_patching_fact_kernel_to_apply }}"
         file_type: file
@@ -109,7 +107,6 @@
         group: sapsys
         mode: '0755'
         directory_mode: '0755'
-      changed_when: true
 
   # This rescue block cannot remove any files in current form, because backup is not implemented.
   # TODO: Add global exe backup tasks that can be used in rescue block to restore original state.

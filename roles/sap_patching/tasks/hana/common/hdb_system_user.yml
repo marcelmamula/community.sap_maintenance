@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Reusable task file for activation or deactivation of the SYSTEM user in SAP HANA database.
+#
+# Input variable, set with 'vars' of the including task, so that it is gone after the include:
+#   __sap_patching_hdb_system_user_action - 'ACTIVATE' or 'DEACTIVATE'
+
+
+# 'hdbsql' waits for the credentials in interactive mode when no user store key is provided and no
+# default key is set, so 'timeout' is used to end it instead of blocking the whole patching.
+- name: SAP Patching - HDB Server - Apply - {{ __sap_patching_hdb_system_user_action | d('') }} the HANA SYSTEM user
+  ansible.builtin.command:
+    cmd: >-
+      timeout 30
+      /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/SYS/exe/hdb/hdbsql
+      -d SYSTEMDB
+      -quiet -x -a
+      {{ '-U ' + sap_patching_hdb_server_activate_admin_userstore_key
+        if sap_patching_hdb_server_activate_admin_userstore_key | d('', true) | length > 0 else '' }}
+      {{ '-u ' + sap_patching_hdb_server_activate_admin_user
+        if sap_patching_hdb_server_activate_admin_user | d('', true) | length > 0 else '' }}
+      {{ '-p ''' + sap_patching_hdb_server_activate_admin_password + ''''
+        if sap_patching_hdb_server_activate_admin_password | d('', true) | length > 0 else '' }}
+      "ALTER USER {{ sap_patching_hdb_server_cf_system_user
+        if sap_patching_hdb_server_cf_system_user | d('', true) | length > 0 else 'SYSTEM' }}
+      {{ __sap_patching_hdb_system_user_action }}"
+  become: true
+  become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+  register: __sap_patching_register_hdb_system_user
+  changed_when: __sap_patching_register_hdb_system_user.rc == 0
+  failed_when: false  # Fail is handled in the next task, which reports the output of the command.
+  # Hide output from logs when password is included.
+  no_log: "{{ true if sap_patching_hdb_server_activate_admin_password | d('', true) | length > 0 else false }}"
+
+- name: SAP Patching - HDB Server - Apply - Fail if the HANA SYSTEM user update command failed
+  ansible.builtin.fail:
+    msg: |
+      FAIL: The action '{{ __sap_patching_hdb_system_user_action }}' of the SAP HANA SYSTEM user failed.
+      {% if sap_patching_hdb_server_activate_admin_password | d('', true) | length > 0 %}
+      The command was executed with a password, so the command is not shown in the logs.
+      {% else %}
+      Command executed: {{ __sap_patching_register_hdb_system_user.cmd | d('') }}
+      Stdout: {{ __sap_patching_register_hdb_system_user.stdout | d('') }}
+      Stderr: {{ __sap_patching_register_hdb_system_user.stderr | d('') }}
+      {% endif %}
+  when:
+    - "'ERROR' in __sap_patching_register_hdb_system_user.stderr | d('')
+      or __sap_patching_register_hdb_system_user.rc | d(1) != 0"

@@ -17,10 +17,10 @@
   become: true  # Saproot is executed as root user
   register: __sap_patching_register_kernel_saproot
   changed_when: __sap_patching_register_kernel_saproot.rc == 0
-  when:
-    - __sap_patching_register_kernel_saproot_sh_stat.stat.exists
-    - __sap_patching_register_kernel_saproot_sh_stat.stat.mode is search('..7$|..5$|..1$')
-  failed_when: false  # Fail is handled in the next task using '.rc' instead of '.failed'.
+  failed_when: false  # Fail is handled in the next task using 'rc' instead of default 'failed'.
+  # Permissions of the file are not evaluated, because the script is executed as root
+  # and a file which cannot be executed is reported by the next task.
+  when: __sap_patching_register_kernel_saproot_sh_stat.stat.exists
 
 - name: SAP Patching - Kernel - Saproot - Fail if 'saproot' command has failed
   ansible.builtin.fail:

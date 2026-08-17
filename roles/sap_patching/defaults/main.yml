@@ -170,7 +170,7 @@ sap_patching_hdb_server_source: ''  # e.g. /install/hana/server/source
 sap_patching_hdb_server_source_local: ''  # e.g. "/install/hana/server/source"
 
 # The name of directory either relative to 'sap_patching_hdb_server_base' or absolute path to the HDB server (String).
-# If not set, the task 'abap_hdb_server_prepare' will populate correct directory,
+# If not set, the task 'hdb_server_prepare' will populate correct directory,
 # or fall back to 'sap_patching_hdb_server_to_apply_symlink'.
 sap_patching_hdb_server_to_apply: ''
 
@@ -179,20 +179,6 @@ sap_patching_hdb_server_to_apply: ''
 sap_patching_hdb_server_install_path:
   "{{ '/usr/sap/' + (sap_patching_hdb_system_sid | d(sap_patching_sap_system_sid)) | upper + '/SYS/exe/hdb' }}"
 
-## HDB configfile parameters:
-
-# The name of database user to use for patching (String).
-# This is parameter in hdblcm configfile template.
-# Documentation: https://help.sap.com/docs/SAP_HANA_PLATFORM/2c1988d620e04368aa4103bf26f17727/df3de8c31cef45c0847d2804b97604ea.html
-# NOTE: See documentation for limitations like XSA update not working with this option.
-# sap_patching_hdb_server_cf_system_user: ''
-
-# The password of database user defined in 'sap_patching_hdb_server_cf_system_user' to use for patching (String).
-# This is parameter in hdblcm configfile template.
-# Documentation: https://help.sap.com/docs/SAP_HANA_PLATFORM/2c1988d620e04368aa4103bf26f17727/df3de8c31cef45c0847d2804b97604ea.html
-# NOTE: See documentation for limitations like XSA update not working with this option.
-# sap_patching_hdb_server_cf_system_user_password: ''
-
 ## User activation variables
 # Set to 'true' if system user (SYSTEM) needs to be activated prior to patching (Boolean).
 sap_patching_hdb_server_activate_system_user: true
@@ -200,7 +186,7 @@ sap_patching_hdb_server_activate_system_user: true
 # The name of SAP HANA admin user store key (hdbuserstore) to use when activating the SYSTEM user (String).
 # Must be key with permissions to activate SYSTEM user, but not SYSTEM user itself.
 # If not set, falls back to 'sap_patching_hdb_server_activate_admin_user' and 'sap_patching_hdb_server_activate_admin_password'.
-sap_patching_hdb_server_activate_admin_userstore_key: ''
+# sap_patching_hdb_server_activate_admin_userstore_key: ''
 
 # The name of SAP HANA admin user to use when activating the SYSTEM user (String).
 # Required when 'sap_patching_hdb_server_activate_system_user' is 'true',
@@ -217,6 +203,7 @@ sap_patching_hdb_server_activate_admin_userstore_key: ''
 sap_patching_hdb_server_is_clustered: false
 
 # The name of cluster resource for HDB server that will be managed by this role (String).
+# Required when 'sap_patching_hdb_server_is_clustered' is 'true'.
 # Examples for SID 'H01' and instance number '90':
 # - Clone for 'SAPHanaController' resource agent in SAPHanaSR-angi cluster.
 #   - SUSE: 'mst_SAPHanaCon_H01_HDB90'
@@ -224,10 +211,14 @@ sap_patching_hdb_server_is_clustered: false
 # - Clone for 'SAPHana' resource agent in SAPHanaSR classic cluster.
 #   - SUSE: 'mls_SAPHana_H01_HDB90'
 #   - Red Hat: 'cln_SAPHana_H01_HDB90'
-# Default value belongs to 'SAPHanaSR-angi' version with instance number '00',
-# because this role does not use instance number variable.
-sap_patching_hdb_server_cluster_hdb_resource_name:
-  "cln_SAPHanaCon_{{ (sap_patching_hdb_system_sid | d(sap_patching_sap_system_sid)) | upper }}_HDB00"
+# Default value is not specified, because this role does not use instance number variable.
+sap_patching_hdb_server_cluster_saphana_clone_name: ''
+
+# Time in seconds to wait for the takeover after the cluster resource was relocated (Integer).
+# The cluster commands for the relocation do not wait for its completion and the takeover stops
+# and starts the database, so the required time depends on the size of the database.
+# The state of the replication is unchanged until the takeover happens.
+sap_patching_hdb_server_cluster_relocate_timeout: 1800
 
 # Select whether the HDB server files are already present on the managed nodes (Boolean).
 # If 'true', the HDB server files are already on managed nodes (e.g., pre-staged to NFS or local disk)
@@ -241,6 +232,19 @@ sap_patching_hdb_server_files_on_target: true
 # If 'false', the HDB server files will copied and extracted on all target hosts separately.
 # NOTE: Existing shared filesystem is expected to be present and accessible by all hosts if 'true'.
 sap_patching_hdb_server_files_shared: true
+
+## HDB configfile parameters:
+# The name of database user to use for patching (String).
+# This is parameter in hdblcm configfile template.
+# Documentation: https://help.sap.com/docs/SAP_HANA_PLATFORM/2c1988d620e04368aa4103bf26f17727/df3de8c31cef45c0847d2804b97604ea.html
+# NOTE: See documentation for limitations like XSA update not working with this option.
+# sap_patching_hdb_server_cf_system_user: ''
+
+# The password of database user defined in 'sap_patching_hdb_server_cf_system_user' to use for patching (String).
+# This is parameter in hdblcm configfile template.
+# Documentation: https://help.sap.com/docs/SAP_HANA_PLATFORM/2c1988d620e04368aa4103bf26f17727/df3de8c31cef45c0847d2804b97604ea.html
+# NOTE: See documentation for limitations like XSA update not working with this option.
+# sap_patching_hdb_server_cf_system_user_password: ''
 
 
 ### Host agent patching settings

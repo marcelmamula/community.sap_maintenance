@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Reusable task file for changing the cluster maintenance mode.
+# The command of the cluster shell is selected by the OS family of the managed node,
+# which is validated together with the state of the cluster before the patching starts.
+# Commands are defined in the 'vars/main.yml' file of the role.
+#
+# Input variable, set with 'vars' of the including task, so that it is gone after the include:
+#   __sap_patching_hdb_cluster_maintenance_mode - 'true' or 'false' as a string, not as a boolean
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Set cluster maintenance mode to '{{ __sap_patching_hdb_cluster_maintenance_mode | d('') }}'
+  ansible.builtin.command:
+    cmd: "{{ __sap_patching_hdb_cluster_cmd[ansible_facts['os_family']]['maintenance'] }}"
+  become: true
+  register: __sap_patching_register_hdb_cluster_maintenance_output
+  changed_when: __sap_patching_register_hdb_cluster_maintenance_output.rc == 0
+  failed_when: false  # Fail is handled in the next task using 'rc' instead of default 'failed'.
+
+- name: SAP Patching - HDB Server - Apply - Cluster - Fail if cluster maintenance mode change has failed
+  ansible.builtin.fail:
+    msg: |
+      FAIL: Change of cluster maintenance mode to '{{ __sap_patching_hdb_cluster_maintenance_mode }}' has failed.
+      Command executed: {{ __sap_patching_register_hdb_cluster_maintenance_output.cmd | d('') }}
+      Stdout: {{ __sap_patching_register_hdb_cluster_maintenance_output.stdout | d('') }}
+      Stderr: {{ __sap_patching_register_hdb_cluster_maintenance_output.stderr | d('') }}
+  when:
+    - "'failed' in __sap_patching_register_hdb_cluster_maintenance_output.stderr | d('')
+      or __sap_patching_register_hdb_cluster_maintenance_output.rc | d(1) != 0"
+
+# Run time fact to help us show rescue warning, that cluster is in maintenance mode, if the role fails after this point.
+- name: SAP Patching - HDB Server - Apply - Cluster - Set fact that cluster maintenance mode has been set
+  ansible.builtin.set_fact:
+    __sap_patching_fact_hdb_cluster_in_maintenance:
+      "{{ true if __sap_patching_hdb_cluster_maintenance_mode | d('') == 'true' else false }}"

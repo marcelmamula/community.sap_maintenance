@@ -13,12 +13,12 @@
     __sap_patching_fact_kernel_global_exe:
       "/usr/sap/{{ __sap_patching_fact_sap_system_sid | upper }}/SYS/exe/run"
 
-- name: SAP Patching - Kernel - Detect - Stat availability of the global exe directory {{ __sap_patching_fact_kernel_global_exe }}
+- name: SAP Patching - Kernel - Detect - Stat availability of the global exe directory
   ansible.builtin.stat:
     path: "{{ __sap_patching_fact_kernel_global_exe }}"
   register: __sap_patching_register_sapmnt_exe_stat
 
-- name: SAP Patching - Kernel - Detect - Find files in the global exe directory {{ __sap_patching_fact_kernel_global_exe }}
+- name: SAP Patching - Kernel - Detect - Find files in the global exe directory
   ansible.builtin.find:
     paths: "{{ __sap_patching_fact_kernel_global_exe }}"
     file_type: file
@@ -35,8 +35,7 @@
       "{{ __sap_patching_register_sapmnt_exe_files.matched | d(0) | int > 0 }}"
 
 
-# Every host builds the same list from 'hostvars', so neither 'run_once' nor delegation is needed.
-# 'ansible_play_hosts' excludes failed and unreachable hosts, so those are never elected.
+# List of all hosts, which detected this component, is set on all hosts in the play using 'hostvars'.
 - name: SAP Patching - Kernel - Detect - Set fact with hosts in play where the kernel is present
   ansible.builtin.set_fact:
     __sap_patching_fact_kernel_hosts: >-
@@ -51,11 +50,9 @@
   ansible.builtin.set_fact:
     __sap_patching_fact_kernel_primary_host: "{{ __sap_patching_fact_kernel_hosts | first | d('') }}"
 
-# Detection is never fatal, so that a single play can contain hosts of different roles.
-# A failure here would remove the host from 'ansible_play_hosts' and therefore cancel
+# Detection finding no installation is not fatal, so that a single play can contain hosts of different roles.
+# Failing here would remove the host from 'ansible_play_hosts' and therefore cancel
 # all remaining steps of the execution plan for that host, even the unrelated ones.
-# Broken installations are reported and skipped, and a re-run after fixing them patches the host,
-# because both prepare and apply are idempotent.
 - name: SAP Patching - Kernel - Detect - Warning that the kernel patching is skipped on this host
   ansible.builtin.debug:
     msg: |

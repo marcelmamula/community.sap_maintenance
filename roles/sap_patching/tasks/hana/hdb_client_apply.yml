@@ -13,9 +13,7 @@
     file: hdb_client_detect.yml
 
 
-# Reported once, because every host in play builds the identical list of hosts with the client installed.
-# Evaluating 'when' on the first host only is therefore safe, even though it is combined with 'run_once'.
-# This is only a warning, so that other plan steps can still be executed.
+# Warning with 'run_once', because all hosts in the play have same fact set.
 - name: SAP Patching - HDB Client - Apply - Warning if the HDB client is not installed on any host in play
   ansible.builtin.debug:
     msg: |
@@ -50,6 +48,7 @@
     # 1. If the prepare step was executed, use the freshly prepared HDB client path.
     # 2. If the user did not specify a HDB client to apply, use the default symlink path.
     # 3. If the user specified a HDB client to apply, use that path (relative to base or absolute).
+
     - name: SAP Patching - HDB Client - Apply - Set fact with HDB client to apply if prepare was executed
       ansible.builtin.set_fact:
         __sap_patching_fact_hdb_client_to_apply: "{{ __sap_patching_fact_hdb_client_to_apply_prepared }}"
@@ -90,9 +89,9 @@
           and the variable 'sap_patching_hdb_client_to_apply' is set correctly.
       when: not __sap_patching_register_hdb_client_to_apply_stat.stat.exists
               or not (__sap_patching_register_hdb_client_to_apply_stat.stat.isdir
-                or __sap_patching_register_hdb_client_to_apply_stat.stat.islnk)
+              or __sap_patching_register_hdb_client_to_apply_stat.stat.islnk)
 
-    - name: SAP Patching - HDB Client - Apply - Check the content of '{{ __sap_patching_fact_hdb_client_to_apply }}'
+    - name: SAP Patching - HDB Client - Apply - Check the content of '{{ __sap_patching_fact_hdb_client_to_apply | d('') }}'
       ansible.builtin.find:
         paths: "{{ __sap_patching_fact_hdb_client_to_apply }}"
         file_type: any

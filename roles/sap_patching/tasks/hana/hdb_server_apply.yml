@@ -1,86 +1,78 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 
-# Prepare tasks are doing validation already, but apply can be executed without prepare, so validation must happen again.
-- name: SAP Patching - HDB Server - Apply - Stat availability of the base directory
-  ansible.builtin.stat:
-    path: "{{ __sap_patching_hdb_server_base }}"
-  register: __sap_patching_register_hdb_server_apply_base_stat
+# Explanation for validation handling in apply tasks:
+# 1. Detection determines on which hosts in play the HDB server is installed.
+# 2. Patching file validations are executed on those hosts and fail if not valid.
+# 3. Hosts without the HDB server installed are skipped, so that a single play can contain hosts
+#    of different roles. An installation that exists but is not valid still fails.
+# 4. Both prepare and apply are idempotent, so a re-run after fixing the installation patches the host.
 
-- name: SAP Patching - HDB Server - Apply - Fail if user cannot write to base directory
-  ansible.builtin.fail:
+- name: SAP Patching - HDB Server - Apply - Detect hosts where the HDB server is installed
+  ansible.builtin.include_tasks:
+    file: hdb_server_detect.yml
+
+
+# Warning with 'run_once', because all hosts in the play have same fact set.
+- name: SAP Patching - HDB Server - Apply - Warning if the HDB server is not installed on any host in play
+  ansible.builtin.debug:
     msg: |
-      FAIL: The path "{{ sap_patching_hdb_server_base }}" does not exist or is not a directory.
-      Please ensure that the path defined in the variable 'sap_patching_hdb_server_base' is a directory.
-  when: not (__sap_patching_register_hdb_server_apply_base_stat.stat.exists
-          and __sap_patching_register_hdb_server_apply_base_stat.stat.isdir)
+      WARN: The HDB server was not found on any host in play, so there is nothing to patch.
+      If this is unexpected, ensure that the HDB server hosts are part of this play
+      and that the path "{{ sap_patching_hdb_server_install_path }}" is correct.
+  run_once: true
+  when: __sap_patching_fact_hdb_server_hosts | length == 0
 
 
-# Load version to apply in this order:
-# 1. If 'sap_patching_hdb_server_to_apply' is not empty.
-# 2. If '__sap_patching_fact_hdb_server_to_apply' is not defined. We assume prepare was executed.
-# 3. Default symlink 'sap_patching_hdb_server_to_apply_symlink'.
-- name: SAP Patching - HDB Server - Apply - Set fact with HDB server symlink if not specified to default if not defined or empty
-  ansible.builtin.set_fact:
-    __sap_patching_fact_hdb_server_to_apply: >-
-      {{ sap_patching_hdb_server_to_apply | regex_replace('\\/$', '')
-        if sap_patching_hdb_server_to_apply | string | trim | length > 0
-        else (__sap_patching_fact_hdb_server_to_apply
-          if __sap_patching_fact_hdb_server_to_apply is defined
-          else sap_patching_hdb_server_to_apply_symlink) }}
-
-
-- name: SAP Patching - HDB Server - Apply - Set fact with updated HDB server path if it is not an absolute path
-  ansible.builtin.set_fact:
-    __sap_patching_fact_hdb_server_to_apply:
-      "{{ __sap_patching_hdb_server_base }}/{{ __sap_patching_fact_hdb_server_to_apply }}"
-  when: not __sap_patching_fact_hdb_server_to_apply.startswith('/')
-
-
-- name: SAP Patching - HDB Server - Apply - Stat availability of installed HDB server directory
-  ansible.builtin.stat:
-    path: "{{ sap_patching_hdb_server_install_path }}"
-  register: __sap_patching_register_hdb_server_install_stat
-
-# Validate presence of the HDB server installation directory and its content to determine if patching can proceed.
-- name: Block to identify if patching can proceed
-  when:
-    - __sap_patching_register_hdb_server_install_stat.stat.exists
-    - __sap_patching_register_hdb_server_install_stat.stat.islnk
-      or __sap_patching_register_hdb_server_install_stat.stat.isdir
+- name: Block for HDB server apply validations
+  when: __sap_patching_fact_hdb_server_installed | d(false)
   block:
-    - name: SAP Patching - HDB Server - Apply - Find files in the HDB server install directory {{ sap_patching_hdb_server_install_path }}
-      ansible.builtin.find:
-        paths: "{{ sap_patching_hdb_server_install_path }}"
-        file_type: any
-      register: __sap_patching_register_hdb_server_install_path_files
 
-    - name: SAP Patching - HDB Server - Apply - Fail if directory '{{ sap_patching_hdb_server_install_path }}' does not contain HDB server files
+    # Prepare tasks are doing validation already, but apply can be executed without prepare, so validation must happen again.
+    - name: SAP Patching - HDB Server - Apply - Stat availability of the base directory
+      ansible.builtin.stat:
+        path: "{{ __sap_patching_hdb_server_base }}"
+      register: __sap_patching_register_hdb_server_apply_base_stat
+
+    - name: SAP Patching - HDB Server - Apply - Fail if user cannot write to base directory
       ansible.builtin.fail:
         msg: |
-          FAIL: The HDB server installation directory "{{ sap_patching_hdb_server_install_path }}" is empty and patching cannot proceed!
-          Ensure that the path points to valid HDB server installation,
-          where 'hdbdaemon' and 'hdbindexserver' executables are present.
-      vars:
-        __basename_list: "{{ __sap_patching_register_hdb_server_install_path_files.files | map(attribute='path') | map('basename') | list }}"
-      when:
-        - __sap_patching_register_hdb_server_install_path_files.matched | int == 0
-          or ('hdbdaemon' not in __basename_list and 'hdbindexserver' not in __basename_list)
+          FAIL: The path "{{ sap_patching_hdb_server_base }}" does not exist or is not a directory.
+          Please ensure that the path defined in the variable 'sap_patching_hdb_server_base' is a directory.
+      when: not (__sap_patching_register_hdb_server_apply_base_stat.stat.exists
+              and __sap_patching_register_hdb_server_apply_base_stat.stat.isdir)
 
-    - name: SAP Patching - HDB Server - Apply - Set fact if patching can proceed
+
+    # Facts are set here for improved readability, instead of combining all this logic into one jinja2 block.
+    # The path to the HDB server to apply is resolved with the following precedence:
+    # 1. If the prepare step was executed, use the freshly prepared HDB server path.
+    # 2. If the user did not specify a HDB server to apply, use the default symlink path.
+    # 3. If the user specified a HDB server to apply, use that path (relative to base or absolute).
+
+    - name: SAP Patching - HDB Server - Apply - Set fact with HDB server to apply if prepare was executed
       ansible.builtin.set_fact:
-        __sap_patching_fact_hdb_server_is_ready: true
-      vars:
-        __basename_list: "{{ __sap_patching_register_hdb_server_install_path_files.files | map(attribute='path') | map('basename') | list }}"
+        __sap_patching_fact_hdb_server_to_apply: "{{ __sap_patching_fact_hdb_server_to_apply_prepared }}"
+      when: __sap_patching_fact_hdb_server_to_apply_prepared is defined
+
+    - name: SAP Patching - HDB Server - Apply - Set fact with HDB server to apply if user unspecified
+      ansible.builtin.set_fact:
+        __sap_patching_fact_hdb_server_to_apply:
+          "{{ __sap_patching_hdb_server_base }}/{{ sap_patching_hdb_server_to_apply_symlink }}"
       when:
-        - __sap_patching_register_hdb_server_install_path_files.matched | int > 0
-        - ('hdbdaemon' in __basename_list and 'hdbindexserver' in __basename_list)
+        - __sap_patching_fact_hdb_server_to_apply_prepared is not defined
+        - sap_patching_hdb_server_to_apply | trim | length == 0
 
-
-# Use previous validation to silently skip hosts without HDB server installed
-- name: Block for HDB server apply execution when HDB server installation directory is present)
-  when: __sap_patching_fact_hdb_server_is_ready | d(false)
-  block:
+    - name: SAP Patching - HDB Server - Apply - Set fact with HDB server to apply if user specified
+      ansible.builtin.set_fact:
+        __sap_patching_fact_hdb_server_to_apply: >-
+          {{ __sap_patching_hdb_server_base ~ '/' ~ __user_path
+            if not __user_path.startswith('/')
+            else __user_path }}
+      vars:
+        __user_path: "{{ sap_patching_hdb_server_to_apply | trim | regex_replace('\\/$', '') }}"
+      when:
+        - __sap_patching_fact_hdb_server_to_apply_prepared is not defined
+        - sap_patching_hdb_server_to_apply | trim | length > 0
 
     # Prepare tasks prepared all files on all managed nodes, or on first one with shared filesystem.
     # Be it either of those, we still have to ensure that all hosts have access to these files.
@@ -97,9 +89,9 @@
           and the variable 'sap_patching_hdb_server_to_apply' is set correctly.
       when: not __sap_patching_register_hdb_server_to_apply_stat.stat.exists
               or not (__sap_patching_register_hdb_server_to_apply_stat.stat.isdir
-                or __sap_patching_register_hdb_server_to_apply_stat.stat.islnk)
+              or __sap_patching_register_hdb_server_to_apply_stat.stat.islnk)
 
-    - name: SAP Patching - HDB Server - Apply - Check the content of {{ __sap_patching_fact_hdb_server_to_apply }}
+    - name: SAP Patching - HDB Server - Apply - Check the content of {{ __sap_patching_fact_hdb_server_to_apply | d('') }}
       ansible.builtin.find:
         paths: "{{ __sap_patching_fact_hdb_server_to_apply }}"
         file_type: any
@@ -117,47 +109,144 @@
           or not ('hdblcm' in __basename_list and 'server' in __basename_list)
 
 
+    # The cluster is validated before anything is patched, because a cluster which is not running or
+    # a wrong clone name is discovered otherwise only after the first site was already patched.
+    # Only the modes which set the maintenance mode and relocate the resource need the cluster.
+    - name: Block to validate the cluster of the HDB server
+      when:
+        - sap_patching_hdb_server_is_clustered
+        - __sap_patching_params.update_mode | d('') != 'prepare'
+      block:
+
+        - name: SAP Patching - HDB Server - Apply - Cluster - Fail if the OS family is not a supported cluster shell
+          ansible.builtin.fail:
+            msg: |
+              FAIL: Cluster management is not implemented for the OS family "{{ ansible_facts['os_family'] }}".
+              Supported OS families are: {{ __sap_patching_hdb_cluster_cmd.keys() | join(', ') }}.
+              Set the variable 'sap_patching_hdb_server_is_clustered' to 'false' to patch without cluster handling.
+          when: ansible_facts['os_family'] not in __sap_patching_hdb_cluster_cmd
+
+        - name: SAP Patching - HDB Server - Apply - Cluster - Get details about available services
+          ansible.builtin.service_facts:
+
+        # A service which is not installed is not part of the gathered facts, so both the missing
+        # package and the stopped service are reported by the same task.
+        - name: SAP Patching - HDB Server - Apply - Cluster - Fail if the cluster services are not running
+          ansible.builtin.fail:
+            msg: |
+              FAIL: The cluster services are not running on this host, so the database cannot be patched with cluster handling.
+              State of 'corosync.service': {{ __sap_patching_corosync_state }}
+              State of 'pacemaker.service': {{ __sap_patching_pacemaker_state }}
+              Ensure that the cluster is installed and running on this host,
+              or set the variable 'sap_patching_hdb_server_is_clustered' to 'false' to patch without cluster handling.
+          vars:
+            __sap_patching_corosync_state:
+              "{{ ansible_facts['services']['corosync.service'].state | d('not installed') }}"
+            __sap_patching_pacemaker_state:
+              "{{ ansible_facts['services']['pacemaker.service'].state | d('not installed') }}"
+          when:
+            - __sap_patching_corosync_state != 'running'
+              or __sap_patching_pacemaker_state != 'running'
+
+        # 'crm_resource' is a Pacemaker command, so the same check works with both cluster shells.
+        - name: SAP Patching - HDB Server - Apply - Cluster - Locate the clone resource in the cluster configuration
+          ansible.builtin.command:
+            cmd: crm_resource --locate --resource {{ sap_patching_hdb_server_cluster_saphana_clone_name }}
+          become: true
+          register: __sap_patching_register_hdb_cluster_locate
+          changed_when: false
+          failed_when: false  # Fail is handled in the next task to provide more information.
+
+        - name: SAP Patching - HDB Server - Apply - Cluster - Fail if the cluster resource is not running
+          ansible.builtin.fail:
+            msg: |
+              FAIL: The cluster resource '{{ sap_patching_hdb_server_cluster_saphana_clone_name }}' is not running on this host.
+              Possible causes are that this host is not a member of the cluster, that the name of the
+              clone resource is wrong, or that the resource is stopped or in maintenance mode.
+              Ensure that the resource is running, because the patching sets the maintenance mode of
+              the cluster and relocates the resource to the site which was patched first,
+              or set the variable 'sap_patching_hdb_server_is_clustered' to 'false' to patch without cluster handling.
+              Command executed: crm_resource --locate --resource {{ sap_patching_hdb_server_cluster_saphana_clone_name }}
+              Stdout: {{ __sap_patching_register_hdb_cluster_locate.stdout | d('') }}
+              Stderr: {{ __sap_patching_register_hdb_cluster_locate.stderr | d('') }}
+              Message: {{ __sap_patching_register_hdb_cluster_locate.msg | d('') }}
+          when:
+            - __sap_patching_register_hdb_cluster_locate.rc | d(1) != 0
+              or 'NOT running' in __sap_patching_register_hdb_cluster_locate.stdout | d('')
+
+
+# Detection above already reported and skipped hosts without a valid HDB server installation.
+- name: Block for HDB server apply execution when HDB server installation directory is present
+  when: __sap_patching_fact_hdb_server_installed | d(false)
+  block:
+
     - name: SAP Patching - HDB Server - Apply - Check System Replication Status
       ansible.builtin.shell:
         cmd: >-
-          source /usr/sap/{{ __sap_patching_fact_sap_system_sid }}/home/.sapenv.sh &&
+          source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
           {{ sap_patching_hdb_server_install_path }}/hdbnsutil
           -sr_state
           -sapcontrol=1
       become: true
-      become_user: "{{ __sap_patching_fact_sidadm_user }}"
-      register: __sap_patching_register_hdb_hsr_sr_state
+      become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+      register: __sap_patching_register_hdb_hsr_sr_state_initial
       changed_when: false
+      failed_when: false  # Fail is handled in the next task to provide more information.
 
     - name: SAP Patching - HDB Server - Apply - Fail if HSR state does not allow for patching
       ansible.builtin.fail:
         msg: |
-          FAIL: Status of SAP HANA System Replication does not allow for patching.
+          FAIL: SAP HANA System Replication detection shows status that does not allow patching.
           Command executed: {{ sap_patching_hdb_server_install_path }}/hdbnsutil -sr_state -sapcontrol=1
-          Stdout: {{ __sap_patching_register_hdb_hsr_sr_state.stdout | d('') }}
-          Stderr: {{ __sap_patching_register_hdb_hsr_sr_state.stderr | d('') }}
+          Stdout: {{ __sap_patching_register_hdb_hsr_sr_state_initial.stdout | d('') }}
+          Stderr: {{ __sap_patching_register_hdb_hsr_sr_state_initial.stderr | d('') }}
       when:
-        - "'SAPCONTROL-OK' not in __sap_patching_register_hdb_hsr_sr_state.stdout \
-            or __sap_patching_register_hdb_hsr_sr_state.rc != 0
-            or 'online=true' not in __sap_patching_register_hdb_hsr_sr_state.stdout"
+        - "'SAPCONTROL-OK' not in __sap_patching_register_hdb_hsr_sr_state_initial.stdout | d('')
+            or __sap_patching_register_hdb_hsr_sr_state_initial.rc | d(1) != 0
+            or 'online=true' not in __sap_patching_register_hdb_hsr_sr_state_initial.stdout | d('')"
 
     - name: SAP Patching - HDB Server - Apply - HSR - Set fact if HSR is enabled
       ansible.builtin.set_fact:
         __sap_patching_fact_hdb_hsr_enabled: >-
-          {{ true if 'mode=none' not in __sap_patching_register_hdb_hsr_sr_state.stdout else false }}
+          {{ true if 'mode=none' not in __sap_patching_register_hdb_hsr_sr_state_initial.stdout else false }}
+
+    # The replication and the cluster handling are executed only on the elected host,
+    # so all HDB server hosts in play have to be part of the same replication.
+    - name: SAP Patching - HDB Server - Apply - HSR - Fail if HSR is not enabled on all HDB server hosts in play
+      ansible.builtin.fail:
+        msg: |
+          FAIL: SAP HANA System Replication was not detected on all HDB server hosts.
+          Hosts with replication: {{ __sap_patching_hsr_hosts_enabled | join(', ') }}
+          Hosts without replication:
+          {{ __sap_patching_fact_hdb_server_hosts | difference(__sap_patching_hsr_hosts_enabled) | join(', ') }}
+          Patch the hosts with and without replication in separate plays.
+      vars:
+        __sap_patching_hsr_hosts_enabled: >-
+          {{ __sap_patching_fact_hdb_server_hosts
+             | map('extract', hostvars)
+             | selectattr('__sap_patching_fact_hdb_hsr_enabled', 'defined')
+             | selectattr('__sap_patching_fact_hdb_hsr_enabled')
+             | map(attribute='inventory_hostname')
+             | list }}
+      when:
+        - inventory_hostname == __sap_patching_fact_hdb_server_primary_host
+        - __sap_patching_hsr_hosts_enabled | length > 0
+        - __sap_patching_hsr_hosts_enabled | length != __sap_patching_fact_hdb_server_hosts | length
 
     # Since 'sr_state' can return different modes, we check for all other than 'none'. Examples:
     # mode=primary
     # mode=sync
     - name: Block for when HSR is enabled
-      when: __sap_patching_fact_hdb_hsr_enabled
+      when: __sap_patching_fact_hdb_hsr_enabled | d(false)
       block:
+        # NOTE: The site tiers are sorted as strings, so a tier 10 would be sorted before a tier 2.
+        # This is not handled, because ten replication tiers are an unrealistic landscape.
         # Reason for noqa: Jinja spacing would squash all lines to left, making it unreadable.
-        - name: SAP Patching - HDB Server - Apply - HSR - Set facts with parsed sr_state output  # noqa jinja[spacing]
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Set facts with parsed sr_state output  # noqa jinja[spacing]
           ansible.builtin.set_fact:
             __sap_patching_fact_hdb_hsr_sites: >-
               {{
-                __sap_patching_register_hdb_hsr_sr_state.stdout_lines
+                __sap_patching_register_hdb_hsr_sr_state_initial.stdout_lines
                 | select('match', '^siteTier/')
                 | map('regex_search', '^siteTier/(.+)=(.+)$', '\1','\2')
                 | sort(attribute=1, reverse=true)
@@ -165,7 +254,7 @@
 
             __sap_patching_fact_hdb_hsr_site_to_host: >-
               {% set pairs_list = [] %}
-              {%- for line in __sap_patching_register_hdb_hsr_sr_state.stdout_lines -%}
+              {%- for line in __sap_patching_register_hdb_hsr_sr_state_initial.stdout_lines -%}
                 {% if line is match('^mapping/.+=(.+)/(.+)$') %}
                   {%- set parts_by_equals = line.split('=') -%}
                   {%- set parts_by_slash = parts_by_equals[1].split('/') -%}
@@ -174,58 +263,8 @@
               {%- endfor -%}
               {{ pairs_list | items2dict }}
 
-        - name: Block for SYSTEM user activation
-          when:
-            - sap_patching_hdb_server_activate_system_user
-            # Ensure that it is executed only on primary node, which should be node with lowest site tier value.
-            # 'last' returns lowest SiteTier value and 'first' returns hostname.
-            - __sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_fact_hdb_hsr_sites | last | first ] == ansible_facts['hostname']
-            # - __sap_patching_params.update_mode != 'prepare'
-          block:
-
-            # If hdbuserstore key is not provided and default key is not set,
-            # then hdbsql will wait for credentials in interactive mode, which is solved by timeout.
-            - name: SAP Patching - HDB Server - Apply - HSR - Activate SAP HANA SYSTEM user
-              ansible.builtin.command:
-                cmd: >-
-                  timeout 30
-                  /usr/sap/{{ __sap_patching_fact_sap_system_sid }}/SYS/exe/hdb/hdbsql
-                  -d SYSTEMDB
-                  -quiet -x -a
-                  {{ '-U ' + sap_patching_hdb_server_activate_admin_userstore_key
-                    if sap_patching_hdb_server_activate_admin_userstore_key | d('',true) | length > 0 else '' }}
-                  {{ '-u ' + sap_patching_hdb_server_activate_admin_user
-                    if sap_patching_hdb_server_activate_admin_user | d('',true) | length > 0 else '' }}
-                  {{ '-p ''' + sap_patching_hdb_server_activate_admin_password + ''''
-                    if sap_patching_hdb_server_activate_admin_password | d('',true) | length > 0 else '' }}
-                  "ALTER USER {{ sap_patching_hdb_server_cf_system_user
-                    if sap_patching_hdb_server_cf_system_user | d('',true) | length > 0 else 'SYSTEM' }} ACTIVATE"
-              register: __sap_patching_register_hdb_server_activate_system_output
-              become: true
-              become_user: "{{ __sap_patching_fact_sidadm_user }}"
-              changed_when: "__sap_patching_register_hdb_server_activate_system_output.rc == 0"
-              ignore_errors: true
-
-            # run_once allows failure for all hosts, regardless of block restricted to one host.
-            - name: SAP Patching - HDB Server - Apply - HSR - Fail if SYSTEM user activation failed
-              run_once: true
-              ansible.builtin.fail:
-                msg: |
-                  FAIL: Activation of SAP HANA SYSTEM user failed.
-                  Command executed: {{ __sap_patching_register_hdb_server_activate_system_output.cmd | d('') }}
-                  Stdout: {{ __sap_patching_register_hdb_server_activate_system_output.stdout | d('') }}
-                  Stderr: {{ __sap_patching_register_hdb_server_activate_system_output.stderr | d('') }}
-              when:
-                - "'ERROR' in __sap_patching_register_hdb_server_activate_system_output.stderr | d('')
-                    or __sap_patching_register_hdb_server_activate_system_output.rc != 0"
-
-
-        - name: SAP Patching - HDB Server - Apply - HSR - Set fact with the initial cluster relocation status
-          ansible.builtin.set_fact:
-            __sap_patching_fact_hdb_cluster_relocated: false
-
         # Reason for noqa: Jinja spacing would squash all lines to left, making it unreadable.
-        - name: SAP Patching - HDB Server - Apply - HSR - Set fact with dictionary of hostname and FQDN of hosts  # noqa jinja[spacing]
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Set fact with dictionary of hostname and FQDN of hosts  # noqa jinja[spacing]
           ansible.builtin.set_fact:
             __sap_patching_fact_hdb_host_fqdn: >-
               {% set host_pairs = [] %}
@@ -235,59 +274,94 @@
               {%- endfor -%}
               {{ host_pairs | items2dict }}
 
-        # Skipping HSR hosts if they don't belong to the current inventory (some sites may not be present on this run).
-        - name: SAP Patching - HDB Server - Apply - HSR - Loop through HANA DB sites from highest to lowest tier and apply the patch
-          run_once: true
+
+        # Recorded before the patching starts, because a cluster relocation breaks the replication of
+        # the site which is the primary now, and the parameters to register it again are lost with it.
+        # Executed on the elected host only, because all tasks of the include are delegated anyway.
+        # 'run_once' would select the first host of the play, which does not have to be a HDB server host.
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Record the initial replication parameters of all sites
+          ansible.builtin.include_tasks:
+            file: common/hdb_hsr_status_initial.yml
+          when:
+            - inventory_hostname == __sap_patching_fact_hdb_server_primary_host
+            - __sap_patching_params.update_mode != 'prepare'
+
+
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Activate the HANA SYSTEM user
+          ansible.builtin.include_tasks:
+            file: common/hdb_system_user.yml
+          vars:
+            __sap_patching_hdb_system_user_action: ACTIVATE
+          when:
+            - sap_patching_hdb_server_activate_system_user
+            # Ensure that it is executed only on primary node, which should be node with lowest site tier value.
+            # 'last' returns lowest SiteTier value and 'first' returns hostname.
+            - __sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_fact_hdb_hsr_sites | last | first ] == ansible_facts['hostname']
+            # - __sap_patching_params.update_mode != 'prepare'
+
+
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Set fact with the initial cluster relocation status
+          ansible.builtin.set_fact:
+            __sap_patching_fact_hdb_cluster_relocated: false
+
+        # Skipping HSR Enabled hosts if they don't belong to the current inventory (some sites may not be present on this run).
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Loop through HANA DB sites from highest to lowest tier and apply the patch
           ansible.builtin.include_tasks:
             file: hdb_server_apply_patch.yml
           loop: "{{ __sap_patching_fact_hdb_hsr_sites }}"
           loop_control:
             loop_var: __sap_patching_hdb_hsr_site
+            label: "{{ __sap_patching_hdb_hsr_site | join('/') }}"
           vars:
             __sap_patching_delegated_hdb_server_host:
               "{{ __sap_patching_fact_hdb_host_fqdn[__sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_hdb_hsr_site[0]]] }}"
-          when: __sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_hdb_hsr_site[0]] in __sap_patching_fact_hdb_host_fqdn
+          when:
+            # All tasks of the include are delegated to the host of the patched site, so the loop is
+            # executed on the elected host only, which also keeps the facts of both in the same place.
+            - inventory_hostname == __sap_patching_fact_hdb_server_primary_host
+            - __sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_hdb_hsr_site[0]] in __sap_patching_fact_hdb_host_fqdn
 
 
         # Have re-read the HSR status after patching all sites as the primary may have changed (if clustered and on primary/secondary cluster)
         # or it may not have changed (if just HSR without clustering)
-        - name: Block to deactivate HANA SYSTEM user if required (HSR)
+        - name: Block to validate the HSR state after patching
           when:
-            - sap_patching_hdb_server_activate_system_user | bool
+            - __sap_patching_params.update_mode != 'prepare'
           block:
             # 3: Third 'sr_state' check after patching to see if the replication is still active and the system is online.
-            - name: SAP Patching - HDB Server - Apply - HSR - Check System Replication Status after patching
+            - name: SAP Patching - HDB Server - Apply - HSR Enabled - Check System Replication Status after patching
               ansible.builtin.shell:
                 cmd: >-
-                  source /usr/sap/{{ __sap_patching_fact_sap_system_sid }}/home/.sapenv.sh &&
+                  source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
                   {{ sap_patching_hdb_server_install_path }}/hdbnsutil
                   -sr_state
                   -sapcontrol=1
               become: true
-              become_user: "{{ __sap_patching_fact_sidadm_user }}"
-              register: __sap_patching_register_hdb_hsr_sr_state_3
+              become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+              register: __sap_patching_register_hdb_hsr_sr_state_validated
               changed_when: false
-              failed_when: "'SAPCONTROL-OK' not in __sap_patching_register_hdb_hsr_sr_state_3.stdout or __sap_patching_register_hdb_hsr_sr_state_3.rc != 0"
+              failed_when: false  # Fail is handled in the next task to provide more information.
 
-
-            - name: SAP Patching - HDB Server - Apply - HSR - Fail if HSR state is not valid after patching
+            - name: SAP Patching - HDB Server - Apply - HSR Enabled - Fail if HSR state is not valid after patching
               ansible.builtin.fail:
                 msg: |
                   FAIL: Status of SAP HANA System Replication is not valid after patching.
                   Command executed: {{ sap_patching_hdb_server_install_path }}/hdbnsutil -sr_state -sapcontrol=1
-                  Stdout: {{ __sap_patching_register_hdb_hsr_sr_state_3.stdout | d('') }}
-                  Stderr: {{ __sap_patching_register_hdb_hsr_sr_state_3.stderr | d('') }}
+                  Stdout: {{ __sap_patching_register_hdb_hsr_sr_state_validated.stdout | d('') }}
+                  Stderr: {{ __sap_patching_register_hdb_hsr_sr_state_validated.stderr | d('') }}
               when:
-                - "'SAPCONTROL-OK' not in __sap_patching_register_hdb_hsr_sr_state_3.stdout \
-                    or __sap_patching_register_hdb_hsr_sr_state_3.rc != 0
-                    or 'online=true' not in __sap_patching_register_hdb_hsr_sr_state_3.stdout"
+                - "'SAPCONTROL-OK' not in __sap_patching_register_hdb_hsr_sr_state_validated.stdout | d('')
+                    or __sap_patching_register_hdb_hsr_sr_state_validated.rc | d(1) != 0
+                    or 'online=true' not in __sap_patching_register_hdb_hsr_sr_state_validated.stdout | d('')"
 
+            # NOTE: The site tiers are sorted as strings, so a tier 10 would be sorted before a tier 2.
+            # This is not handled, because ten replication tiers are an unrealistic landscape.
             # Reason for noqa: Jinja spacing would squash all lines to left, making it unreadable.
-            - name: SAP Patching - HDB Server - Apply - HSR - Set facts with parsed sr_state output after patching  # noqa jinja[spacing]
+            - name: SAP Patching - HDB Server - Apply - HSR Enabled - Set facts with parsed sr_state output after patching  # noqa jinja[spacing]
               ansible.builtin.set_fact:
                 __sap_patching_fact_hdb_hsr_sites: >-
                   {{
-                    __sap_patching_register_hdb_hsr_sr_state_3.stdout_lines
+                    __sap_patching_register_hdb_hsr_sr_state_validated.stdout_lines
                     | select('match', '^siteTier/')
                     | map('regex_search', '^siteTier/(.+)=(.+)$', '\1','\2')
                     | sort(attribute=1, reverse=true)
@@ -295,7 +369,7 @@
 
                 __sap_patching_fact_hdb_hsr_site_to_host: >-
                   {% set pairs_list = [] %}
-                  {%- for line in __sap_patching_register_hdb_hsr_sr_state_3.stdout_lines -%}
+                  {%- for line in __sap_patching_register_hdb_hsr_sr_state_validated.stdout_lines -%}
                     {% if line is match('^mapping/.+=(.+)/(.+)$') %}
                       {%- set parts_by_equals = line.split('=') -%}
                       {%- set parts_by_slash = parts_by_equals[1].split('/') -%}
@@ -303,184 +377,68 @@
                     {% endif %}
                   {%- endfor -%}
                   {{ pairs_list | items2dict }}
-              when: "'mode=none' not in __sap_patching_register_hdb_hsr_sr_state_3.stdout"
+              when: "'mode=none' not in __sap_patching_register_hdb_hsr_sr_state_validated.stdout | d('')"
 
 
-            - name: SAP Patching - HDB Server - Apply - HSR - Deactivate HANA SYSTEM user
-              ansible.builtin.command:
-                cmd: >-
-                  /usr/sap/{{ __sap_patching_fact_sap_system_sid }}/SYS/exe/hdb/hdbsql
-                  -d SYSTEMDB
-                  -quiet -x -a
-                  {{ '-U ' + sap_patching_hdb_server_activate_admin_userstore_key
-                    if sap_patching_hdb_server_activate_admin_userstore_key | d('',true) | length > 0 else '' }}
-                  {{ '-u ' + sap_patching_hdb_server_activate_admin_user
-                    if sap_patching_hdb_server_activate_admin_user | d('',true) | length > 0 else '' }}
-                  {{ '-p '''  + sap_patching_hdb_server_activate_admin_password + ''''
-                    if sap_patching_hdb_server_activate_admin_password | d('',true) | length > 0 else '' }}
-                  "ALTER USER {{ sap_patching_hdb_server_cf_system_user
-                    if sap_patching_hdb_server_cf_system_user | d('',true) | length > 0 else 'SYSTEM' }} DEACTIVATE"
-              register: __sap_patching_register_hdb_server_deactivate_system_output
-              become: true
-              become_user: "{{ __sap_patching_fact_sidadm_user }}"
-              when:
-                # Ensure that it is executed only on primary node, which should be node with lowest site tier value.
-                # 'last' returns lowest SiteTier value and 'first' returns hostname.
-                - __sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_fact_hdb_hsr_sites | last | first ] == ansible_facts['hostname']
-              changed_when: "__sap_patching_register_hdb_server_deactivate_system_output.rc == 0"
-
-            - name: SAP Patching - HDB Server - Apply - HSR - Fail if SYSTEM user deactivation failed
-              ansible.builtin.fail:
-                msg: |
-                  FAIL: Deactivation of SAP HANA SYSTEM user failed.
-                  Command executed: {{ __sap_patching_register_hdb_server_deactivate_system_output.cmd | d('') }}
-                  Stdout: {{ __sap_patching_register_hdb_server_deactivate_system_output.stdout | d('') }}
-                  Stderr: {{ __sap_patching_register_hdb_server_deactivate_system_output.stderr | d('') }}
-              when:
-                - "'ERROR' in __sap_patching_register_hdb_server_deactivate_system_output.stderr
-                    or __sap_patching_register_hdb_server_deactivate_system_output.rc != 0"
+        # Deactivation is done after the validation above, because a cluster relocation during the
+        # patching may have moved the primary site to another host than the one which activated the user.
+        - name: SAP Patching - HDB Server - Apply - HSR Enabled - Deactivate the HANA SYSTEM user
+          ansible.builtin.include_tasks:
+            file: common/hdb_system_user.yml
+          vars:
+            __sap_patching_hdb_system_user_action: DEACTIVATE
+          when:
+            - sap_patching_hdb_server_activate_system_user | bool
+            # Ensure that it is executed only on primary node, which should be node with lowest site tier value.
+            # 'last' returns lowest SiteTier value and 'first' returns hostname.
+            - __sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_fact_hdb_hsr_sites | last | first ] == ansible_facts['hostname']
 
 
     - name: Block when HSR is not enabled
-      when: not __sap_patching_fact_hdb_hsr_enabled
+      when: not __sap_patching_fact_hdb_hsr_enabled | d(false)
       block:
-        - name: SAP Patching - HDB Server - Apply - Activate HANA SYSTEM user
-          ansible.builtin.command:
-            cmd: >-
-              /usr/sap/{{ __sap_patching_fact_sap_system_sid }}/SYS/exe/hdb/hdbsql
-              -d SYSTEMDB
-              -quiet -x -a
-              {{ '-U ' + sap_patching_hdb_server_activate_admin_userstore_key
-                if sap_patching_hdb_server_activate_admin_userstore_key | d('',true) | length > 0 else '' }}
-              {{ '-u ' + sap_patching_hdb_server_activate_admin_user
-                if sap_patching_hdb_server_activate_admin_user | d('',true) | length > 0 else '' }}
-              {{ '-p '''  + sap_patching_hdb_server_activate_admin_password + ''''
-                if sap_patching_hdb_server_activate_admin_password | d('',true) | length > 0 else '' }}
-              "ALTER USER {{ sap_patching_hdb_server_cf_system_user
-                if sap_patching_hdb_server_cf_system_user | d('',true) | length > 0 else 'SYSTEM' }} ACTIVATE"
-          register: __sap_patching_register_hdb_server_activate_system_output
-          become: true
-          become_user: "{{ __sap_patching_fact_sidadm_user }}"
+        - name: SAP Patching - HDB Server - Apply - HSR Disabled - Activate the HANA SYSTEM user
+          ansible.builtin.include_tasks:
+            file: common/hdb_system_user.yml
+          vars:
+            __sap_patching_hdb_system_user_action: ACTIVATE
           when: sap_patching_hdb_server_activate_system_user
-          changed_when: "__sap_patching_register_hdb_server_activate_system_output.rc == 0"
-
-        - name: SAP Patching - HDB Server - Apply - Fail if SYSTEM user activation failed
-          ansible.builtin.fail:
-            msg: |
-              FAIL: Activation of SAP HANA SYSTEM user failed.
-              Command executed: {{ __sap_patching_register_hdb_server_activate_system_output.cmd | d('') }}
-              Stdout: {{ __sap_patching_register_hdb_server_activate_system_output.stdout | d('') }}
-              Stderr: {{ __sap_patching_register_hdb_server_activate_system_output.stderr | d('') }}
-          when:
-            - "'ERROR' in __sap_patching_register_hdb_server_activate_system_output.stderr
-                or __sap_patching_register_hdb_server_activate_system_output.rc != 0"
 
 
         # __sap_patching_delegated_hdb_server_host is set here only for compatibility
         # with the task file which is used for both HSR and no HSR.
-        - name: SAP Patching - HDB Server - Apply - Proceed with patching (non-HSR)
+        - name: SAP Patching - HDB Server - Apply - HSR Disabled - Proceed with patching
+          ansible.builtin.include_tasks:
+            file: hdb_server_apply_patch.yml
           vars:
             __sap_patching_delegated_hdb_server_host: "{{ inventory_hostname }}"
-          ansible.builtin.include_tasks: hdb_server_apply_patch.yml
 
-        - name: SAP Patching - HDB Server - Apply - Deactivate HANA SYSTEM user
-          ansible.builtin.command:
-            cmd: >-
-              /usr/sap/{{ __sap_patching_fact_sap_system_sid }}/SYS/exe/hdb/hdbsql
-              -d SYSTEMDB
-              -quiet -x -a
-              {{ '-U ' + sap_patching_hdb_server_activate_admin_userstore_key
-                if sap_patching_hdb_server_activate_admin_userstore_key | d('',true) | length > 0 else '' }}
-              {{ '-u ' + sap_patching_hdb_server_activate_admin_user
-                if sap_patching_hdb_server_activate_admin_user | d('',true) | length > 0 else '' }}
-              {{ '-p '''  + sap_patching_hdb_server_activate_admin_password + ''''
-                if sap_patching_hdb_server_activate_admin_password | d('',true) | length > 0 else '' }}
-              "ALTER USER {{ sap_patching_hdb_server_cf_system_user
-                if sap_patching_hdb_server_cf_system_user | d('',true) | length > 0 else 'SYSTEM' }} DEACTIVATE"
-          register: __sap_patching_register_hdb_server_deactivate_system_output
-          become: true
-          become_user: "{{ __sap_patching_fact_sidadm_user }}"
+
+        - name: SAP Patching - HDB Server - Apply - HSR Disabled - Deactivate the HANA SYSTEM user
+          ansible.builtin.include_tasks:
+            file: common/hdb_system_user.yml
+          vars:
+            __sap_patching_hdb_system_user_action: DEACTIVATE
           when: sap_patching_hdb_server_activate_system_user
-          changed_when: "__sap_patching_register_hdb_server_deactivate_system_output.rc == 0"
-
-        - name: SAP Patching - HDB Server - Apply - HSR - Fail if SYSTEM user deactivation failed
-          ansible.builtin.fail:
-            msg: |
-              FAIL: Deactivation of SAP HANA SYSTEM user failed.
-              Command executed: {{ __sap_patching_register_hdb_server_deactivate_system_output.cmd | d('') }}
-              Stdout: {{ __sap_patching_register_hdb_server_deactivate_system_output.stdout | d('') }}
-              Stderr: {{ __sap_patching_register_hdb_server_deactivate_system_output.stderr | d('') }}
-          when:
-            - "'ERROR' in __sap_patching_register_hdb_server_deactivate_system_output.stderr
-                or __sap_patching_register_hdb_server_deactivate_system_output.rc != 0"
 
 
-# Example outputs from 'sr_state' command:
-# ### no HSR
-# psaadm@dvpcpsadbw01:/usr/sap/PSA/HDB00> hdbnsutil -sr_state -sapcontrol=1
-# SAPCONTROL-OK: <begin>
-# online=true
-# mode=none
-# SAPCONTROL-OK: <end>
-# done.
-# ### 3 tier HSR - primary
-# ppaadm@hdbserver01:/usr/sap/PPA/HDB00> hdbnsutil -sr_state -sapcontrol=1
-# SAPCONTROL-OK: <begin>
-# online=true
-# mode=sync
-# operation mode=logreplay
-# site id=1
-# site name=DCS01
-# isSource=false
-# isConsumer=true
-# hasConsumers=false
-# isTakeoverActive=false
-# isPrimarySuspended=false
-# isTimetravelEnabled=false
-# replayMode=auto
-# active primary site=4
-# primary masters=hdbserver02
-# mapping/hdbserver01=DCS02/hdbserver02
-# mapping/hdbserver01=DCW02/hdbdrserver02
-# mapping/hdbserver01=DCW01/hdbdrserver01
-# mapping/hdbserver01=DCS01/hdbserver01
-# siteTier/DCS02=1
-# siteTier/DCW01=2
-# siteTier/DCW02=3
-# siteTier/DCS01=2
-# siteReplicationMode/DCS02=primary
-# siteReplicationMode/DCW01=async
-# siteReplicationMode/DCW02=sync
-# siteReplicationMode/DCS01=sync
-# siteOperationMode/DCS02=primary
-# siteOperationMode/DCW01=logreplay
-# siteOperationMode/DCW02=logreplay
-# siteOperationMode/DCS01=logreplay
-# siteMapping/DCS02=DCW01
-# siteMapping/DCW01=DCW02
-# siteMapping/DCS02=DCS01
-# hintBasedRoutingSite=
-# SAPCONTROL-OK: <end>
-# done.
-# Performing Final Memory Release with 12 threads.
-# Finished Final Memory Release successfuly.
-### 2 tier with system down
-# pciadm@tcpcpcidbw02:/usr/sap/PCI/HDB00> hdbnsutil -sr_state -sapcontrol=1
-# SAPCONTROL-OK: <begin>
-# online=false
-# mode=sync
-# operation mode=unknown
-# site id=2
-# site name=DCW02
-# isSource=unknown
-# isConsumer=true
-# hasConsumers=unknown
-# isTakeoverActive=false
-# isPrimarySuspended=false
-# isTimetravelEnabled=false
-# replayMode=auto
-# active primary site=1
-# primary masters=tcpcpcidbw01
-# SAPCONTROL-OK: <end>
-# done.
-# ###
+  # The rescue reports the state the cluster was left in, because the maintenance mode is enabled
+  # for the whole patching. It has to fail again, otherwise the error of the task above would be
+  # considered handled and the remaining steps of the execution plan would continue.
+  rescue:
+    - name: SAP Patching - HDB Server - Apply - Fail with the cluster state after a failed patching
+      ansible.builtin.fail:
+        msg: |
+          FAIL: The HDB server patching failed with the error shown above.
+          {% if __sap_patching_fact_hdb_cluster_in_maintenance | d(false) | bool %}
+          The SAP HANA cluster is still in maintenance mode, so its resources are not managed
+          and no takeover is possible. Repair the system and disable the maintenance mode with:
+          {% if ansible_facts['os_family'] == 'Suse' %}
+          crm --force configure property maintenance-mode=false
+          {% else %}
+          pcs property set maintenance-mode=false
+          {% endif %}
+          {% else %}
+          The cluster maintenance mode is disabled.
+          Ensure that all cluster resources are online and running before running the role again.
+          {% endif %}

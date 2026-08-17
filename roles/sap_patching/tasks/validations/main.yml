@@ -47,12 +47,12 @@
 - name: SAP Patching - Validation - Get details about available users
   ansible.builtin.getent:
     database: passwd
-  failed_when: false
+  failed_when: false  # Using filter can cause failure, but this is left only for validation purposes.
 
 - name: SAP Patching - Validation - Get details about available groups
   ansible.builtin.getent:
     database: group
-  failed_when: false
+  failed_when: false  # Using filter can cause failure, but this is left only for validation purposes.
 
 
 # The primary SID is mandatory for every run and drives the owner of the staging files,
@@ -91,5 +91,5 @@
     file: plan_step.yml
   loop: "{{ sap_patching_execution_plan }}"
   loop_control:
-    label: "Validating step: {{ __sap_patching_step }}"
+    label: "Validating step: {{ __sap_patching_step | d('N/A') }}"
     loop_var: __sap_patching_step

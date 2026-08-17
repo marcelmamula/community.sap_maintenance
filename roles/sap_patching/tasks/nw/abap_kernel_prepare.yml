@@ -6,14 +6,14 @@
 
 - name: SAP Patching - Kernel - Prepare - Detect hosts where the kernel is installed
   ansible.builtin.include_tasks:
-    file: shared_kernel_detect.yml
+    file: common/shared_kernel_detect.yml
   vars:
     __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid | upper }}"
 
 
 - name: SAP Patching - Kernel - Prepare - Execute shared tasks for kernel prepare
   ansible.builtin.include_tasks:
-    file: shared_kernel_prepare.yml
+    file: common/shared_kernel_prepare.yml
   vars:
     __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid | upper }}"
     __sap_patching_fact_kernel_base: "{{ __sap_patching_kernel_base }}"
@@ -162,18 +162,18 @@
             __sap_patching_fact_kernel_pn:
               "{{ sap_patching_kernel_prepare_append_to_version | regex_search('^\\d+p(\\d+)$', '\\1') | first | int }}"
 
-        - name: SAP Patching - Kernel - Prepare - Set fact with extracted kernel directory
+        - name: SAP Patching - Kernel - Prepare - Set fact with extracted kernel directory in append mode
           ansible.builtin.set_fact:
             __sap_patching_fact_kernel_extract_target:
               "{{ __sap_patching_kernel_base }}/k{{ sap_patching_kernel_prepare_append_to_version }}"
 
         # We check if kernel directory exists only in append mode, because in non-append mode we will create the directory.
-        - name: SAP Patching - Kernel - Prepare - Stat availability of target kernel directory
+        - name: SAP Patching - Kernel - Prepare - Stat availability of target kernel directory in append mode
           ansible.builtin.stat:
             path: "{{ __sap_patching_fact_kernel_extract_target }}"
           register: __sap_patching_register_kernel_extract_target_stat
 
-        - name: SAP Patching - Kernel - Prepare - Fail if target kernel directory does not exist or is not a directory
+        - name: SAP Patching - Kernel - Prepare - Fail if target kernel directory does not exist or is not a directory in append mode
           ansible.builtin.fail:
             msg: |
               FAIL: Target kernel directory '{{ __sap_patching_fact_kernel_extract_target }}' does not exist or is not a directory.
@@ -187,6 +187,8 @@
         dest: "{{ __sap_patching_fact_kernel_extract_target }}/"
         remote_src: true
         mode: 'preserve'
+        owner: "{{ __sap_patching_file_owner }}"
+        group: "{{ sap_patching_file_group }}"
       when: __sap_patching_fact_kernel_extract_target != __sap_patching_kernel_source
 
     - name: SAP Patching - Kernel - Prepare - Prepare directory for kernel extraction
@@ -255,16 +257,17 @@
         - __sap_patching_kernel_delta_mode
 
 
-    # Not going to use sapcontrol -nr 00 -function GetVersionInfo
-    - name: SAP Patching - Kernel - Prepare - Check kernel release and patch number using disp+work in extracted kernel directory
+    # NOTE: Another potential approach is to use 'sapcontrol -nr 00 -function GetVersionInfo'.
+    # Reason for noqa: Shell retains the environment variables.
+    - name: SAP Patching - Kernel - Prepare - Check kernel release and patch number using disp+work in extracted kernel directory  # noqa command-instead-of-shell
       ansible.builtin.shell:
-        cmd: >
-          set -o pipefail &&
+        cmd: >-
           {{ __sap_patching_fact_kernel_extract_target }}/{{ __sap_patching_kernel_extracted }}/disp+work
       environment:
         LD_LIBRARY_PATH: "{{ __sap_patching_fact_ld_library_path }}"
       register: __sap_patching_register_disp_work_output
       changed_when: false
+      failed_when: false  # Fail is handled in the next task to provide more information.
 
     - name: SAP Patching - Kernel - Prepare - Fail if 'disp+work' command failed in the extracted kernel directory
       ansible.builtin.fail:
@@ -272,17 +275,19 @@
           FAIL: The command 'disp+work' has failed in the extracted kernel directory.
           Output: {{ __sap_patching_register_disp_work_output.stdout | d('') }}
           Error: {{ __sap_patching_register_disp_work_output.stderr | d('') }}
-      when: __sap_patching_register_disp_work_output.rc != 0
+      when: __sap_patching_register_disp_work_output.rc | d(1) != 0
 
 
     - name: SAP Patching - Kernel - Prepare - Set facts with extracted kernel release and patch number from disp+work output
       ansible.builtin.set_fact:
         __sap_patching_fact_kernel_release_dw:
-          "{{ __sap_patching_register_disp_work_output.stdout | regex_search('kernel release\\s+(\\d+)', '\\1') | first | d('0') }}"
+          "{{ __sap_patching_register_disp_work_output.stdout
+              | regex_search('kernel release\\s+(\\d+)', '\\1') | d([], true) | first | d('0') }}"
           # "{{ __sap_patching_register_disp_work_output.stdout_lines | select('search', '^kernel release')
           #   | list | first | regex_search('kernel release\\s+(\\d+)', '\\1') | first }}"
         __sap_patching_fact_kernel_patch_dw:
-          "{{ __sap_patching_register_disp_work_output.stdout | regex_search('patch number\\s+(\\d+)', '\\1') | first | d('0') }}"
+          "{{ __sap_patching_register_disp_work_output.stdout
+              | regex_search('patch number\\s+(\\d+)', '\\1') | d([], true) | first | d('0') }}"
           # "{{ __sap_patching_register_disp_work_output.stdout_lines | select('search', '^patch number')
           #   | list | first | regex_search('patch number\\s+(\\d+)', '\\1') | first }}"
 
@@ -303,7 +308,7 @@
       block:
         - name: SAP Patching - Kernel - Prepare - Copy temporary kernel directory contents to final destination
           ansible.builtin.copy:
-            src: "{{ __sap_patching_kernel_base }}/kTMPp{{ __sap_patching_fact_kernel_pn }}/"
+            src: "{{ __sap_patching_fact_kernel_extract_target }}/"
             dest: "{{ __sap_patching_kernel_base }}/k{{ __sap_patching_fact_kernel_release_dw }}p{{
               __sap_patching_fact_kernel_pn }}{{ __sap_patching_kernel_fact_delta_suffix | d('') }}/"
             remote_src: true
@@ -313,7 +318,7 @@
 
         - name: SAP Patching - Kernel - Prepare - Remove the temporary kernel directory
           ansible.builtin.file:
-            path: "{{ __sap_patching_kernel_base }}/kTMPp{{ __sap_patching_fact_kernel_pn }}"
+            path: "{{ __sap_patching_fact_kernel_extract_target }}"
             state: absent
 
         - name: SAP Patching - Kernel - Prepare - Set fact with updated target kernel SP directory variable
@@ -347,6 +352,7 @@
       become_user: "{{ __sap_patching_file_owner }}"
       when: not __sap_patching_kernel_append_mode
 
+    # This fact is not used in this 'prepare' task, but it is set for the next 'apply' task to use it.
     - name: SAP Patching - Kernel - Prepare - Set fact with prepared path for further execution tasks
       ansible.builtin.set_fact:
         __sap_patching_fact_abap_kernel_to_apply_prepared:
@@ -380,9 +386,7 @@
     - __sap_patching_register_kernel_source_dir_content.matched | d(0) == 0
 
 
-# In shared mode the kernel is prepared only on the primary host, so the remaining installed hosts
-# copy the resolved path from it. The staging area is shared, therefore the path is identical and the
-# verification block below can confirm that every installed host actually sees the prepared kernel.
+# Set the fact from the primary host on all other hosts, so they can verify that the prepared path is visible.
 - name: SAP Patching - Kernel - Prepare - Propagate prepared kernel path from the primary host
   ansible.builtin.set_fact:
     __sap_patching_fact_abap_kernel_to_apply_prepared:
@@ -394,8 +398,7 @@
     - hostvars[__sap_patching_fact_kernel_primary_host]['__sap_patching_fact_abap_kernel_to_apply_prepared'] is defined
 
 
-# Executed on every host with the kernel installed, because extraction above can be limited
-# to the elected primary host. This is the only check proving that the base directory is really shared.
+# Runs on every host and checks that the prepared directory is visible on all of them.
 - name: Block for all hosts
   when:
     - __sap_patching_fact_kernel_installed | d(false)
@@ -418,3 +421,18 @@
           is on a shared filesystem mounted on all hosts,
           or set 'sap_patching_kernel_files_shared' to 'false' to prepare kernel on every host separately.
       when: not __sap_patching_register_kernel_prepared_stat.stat.exists
+
+
+- name: SAP Patching - Kernel - Prepare - Inform that the apply step is not part of the execution plan
+  ansible.builtin.debug:
+    msg: |
+      INFO: Step 'abap_kernel_prepare' was completed, but the step 'abap_kernel_apply'
+      is not part of the current execution plan.
+      The kernel files are prepared in the path: {{ __sap_patching_fact_abap_kernel_to_apply_prepared }}
+
+      When executing the step 'abap_kernel_apply' keep current variables identical to use same path,
+      or define different using the variable 'sap_patching_kernel_to_apply'.
+  when:
+    - "'abap_kernel_apply' not in sap_patching_execution_plan"
+    - __sap_patching_fact_abap_kernel_to_apply_prepared is defined
+    - inventory_hostname == __sap_patching_fact_kernel_primary_host

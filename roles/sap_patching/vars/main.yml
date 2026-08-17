@@ -147,30 +147,32 @@ __sap_patching_exec_def:
 
   ## Standalone tasks - Stop
   abap_stop_system:
-    file: startstop/abap_stop.yml
+    file: nw/abap_stop.yml
     validators:
       - abap
     vars:
-      sap_control_action: stop_system
+      # sap_control_action: stop_system
       task_execution_mode: direct
 
+  # The task file 'hana/hdb_stop.yml' has to be created before this step can be enabled.
   # hdb_stop_instance:
-  #   file: startstop/hdb_stop.yml
+  #   file: hana/hdb_stop.yml
   #   vars:
   #     sap_control_action: stop_instance
 
 
   ## Standalone tasks - Start
   abap_start_system:
-    file: startstop/abap_start.yml
+    file: nw/abap_start.yml
     validators:
       - abap
     vars:
-      sap_control_action: start_system
+      # sap_control_action: start_system
       task_execution_mode: direct
 
+  # The task file 'hana/hdb_start.yml' has to be created before this step can be enabled.
   # hdb_start_instance:
-  #   file: startstop/hdb_start.yml
+  #   file: hana/hdb_start.yml
   #   vars:
   #     sap_control_action: start_instance
 
@@ -204,6 +206,25 @@ __sap_patching_host_agent_source_local: "{{ sap_patching_host_agent_source_local
 __sap_patching_host_agent_base: "{{ sap_patching_host_agent_base | regex_replace('\\/$', '') }}"
 
 __sap_patching_sapcar_path: "{{ sap_patching_sapcar_path | regex_replace('\\/$', '') }}"
+
+
+# Cluster commands of the supported cluster shells, selected by the OS family of the managed node.
+# Red Hat uses 'pcs' and SUSE uses 'crmsh', but both of them need the same four operations.
+# The commands are templated when they are used, so they read the clone name and the maintenance
+# mode from the variables which are in scope at that moment.
+# NOTE: 'pcs resource move --autodelete' is not used, because the constraint has to be cleared
+# only after the takeover is completed, which is the same handling as with 'crmsh'.
+__sap_patching_hdb_cluster_cmd:
+  RedHat:
+    maintenance: "pcs property set maintenance-mode={{ __sap_patching_hdb_cluster_maintenance_mode }}"
+    move: "pcs resource move {{ sap_patching_hdb_server_cluster_saphana_clone_name }}"
+    clear: "pcs resource clear {{ sap_patching_hdb_server_cluster_saphana_clone_name }}"
+    cleanup: "pcs resource cleanup {{ sap_patching_hdb_server_cluster_saphana_clone_name }}"
+  Suse:
+    maintenance: "crm --force configure property maintenance-mode={{ __sap_patching_hdb_cluster_maintenance_mode }}"
+    move: "crm --force resource move {{ sap_patching_hdb_server_cluster_saphana_clone_name }}"
+    clear: "crm resource clear {{ sap_patching_hdb_server_cluster_saphana_clone_name }}"
+    cleanup: "crm resource cleanup {{ sap_patching_hdb_server_cluster_saphana_clone_name }}"
 
 
 # Default boolean variables

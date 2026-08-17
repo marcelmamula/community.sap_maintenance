@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 
-- name: SAP Patching - Executing step {{ __sap_patching_step }}
+# This task file enables passing vars and run_once without affecting all the steps in the execution plan.
+
+- name: SAP Patching - Executing step {{ __sap_patching_step | d('') }}
   ansible.builtin.include_tasks:
     file: "{{ __sap_patching_exec_def[__sap_patching_step].file }}"
   run_once: "{{ __sap_patching_exec_def[__sap_patching_step].run_once | d(false) }}"

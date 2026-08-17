@@ -14,12 +14,12 @@
         if sap_patching_hdb_client_shared_path | d('') | length > 0
         else sap_patching_hdb_client_install_path }}
 
-- name: SAP Patching - HDB Client - Detect - Stat availability of {{ __sap_patching_fact_hdb_client_path }}
+- name: SAP Patching - HDB Client - Detect - Stat availability of {{ __sap_patching_fact_hdb_client_path | d('') }}
   ansible.builtin.stat:
     path: "{{ __sap_patching_fact_hdb_client_path }}"
   register: __sap_patching_register_hdb_client_install_path_stat
 
-- name: SAP Patching - HDB Client - Detect - Find files in {{ __sap_patching_fact_hdb_client_path }}
+- name: SAP Patching - HDB Client - Detect - Find files in {{ __sap_patching_fact_hdb_client_path | d('') }}
   ansible.builtin.find:
     paths: "{{ __sap_patching_fact_hdb_client_path }}"
     file_type: any
@@ -39,11 +39,10 @@
       {{ __sap_patching_register_hdb_client_path_files.files | d([])
          | map(attribute='path') | map('basename') | list }}
 
-# Detection is never fatal, so that a single play can contain hosts of different roles.
-# A failure here would remove the host from 'ansible_play_hosts' and therefore cancel
+
+# Detection finding no installation is not fatal, so that a single play can contain hosts of different roles.
+# Failing here would remove the host from 'ansible_play_hosts' and therefore cancel
 # all remaining steps of the execution plan for that host, even the unrelated ones.
-# Broken installations are reported and skipped, and a re-run after fixing them patches the host,
-# because both prepare and apply are idempotent.
 - name: SAP Patching - HDB Client - Detect - Warning that the HDB client patching is skipped on this host
   ansible.builtin.debug:
     msg: |
@@ -63,8 +62,7 @@
       {% endif %}
   when: not __sap_patching_fact_hdb_client_installed
 
-# Every host builds the same list from 'hostvars', so neither 'run_once' nor delegation is needed.
-# 'ansible_play_hosts' excludes failed and unreachable hosts, so those are never elected.
+# List of all hosts, which detected this component, is set on all hosts in the play using 'hostvars'.
 - name: SAP Patching - HDB Client - Detect - Set fact with hosts in play where the HDB client is installed
   ansible.builtin.set_fact:
     __sap_patching_fact_hdb_client_hosts: >-

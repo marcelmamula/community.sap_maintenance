@@ -5,13 +5,13 @@
   ansible.builtin.set_fact:
     __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid }}"
   when:
-    - __sap_patching_fact_sap_system_sid | d('',true) | length == 0
-      or __sap_patching_params.task_execution_mode | d('',true)  == 'direct'
+    - __sap_patching_fact_sap_system_sid | d('', true) | length == 0
+      or __sap_patching_params.task_execution_mode | d('', true) == 'direct'
 
 
 - name: SAP Patching - Start ABAP - Include tasks to get a list of sapstartsrv instances
   ansible.builtin.include_tasks:
-    file: sapstartsrv_instances.yml
+    file: common/sapstartsrv_instances.yml
 
 # Instance list is already verified before this file is executed,
 # so we can be sure that there is at least one instance to execute the start on.
@@ -43,8 +43,8 @@
           Output: {{ __sap_patching_register_start_system.stdout | d('') }}
           Error: {{ __sap_patching_register_start_system.stderr | d('') }}
       when:
-        - __sap_patching_register_start_system.rc != 0
-          or 'FAIL' in __sap_patching_register_start_system.stdout
+        - __sap_patching_register_start_system.rc | d(1) != 0
+          or 'FAIL' in __sap_patching_register_start_system.stdout | d('')
 
 
     - name: SAP Patching - Start ABAP - Execute 'sapcontrol' with function 'WaitforStarted' to wait until the system is started
@@ -70,8 +70,8 @@
           Output: {{ __sap_patching_register_start_system_wait.stdout | d('') }}
           Error: {{ __sap_patching_register_start_system_wait.stderr | d('') }}
       when:
-        - __sap_patching_register_start_system_wait.rc != 0
-          or 'FAIL' in __sap_patching_register_start_system_wait.stdout
+        - __sap_patching_register_start_system_wait.rc | d(1) != 0
+          or 'FAIL' in __sap_patching_register_start_system_wait.stdout | d('')
 
 
     # This code has been superseded. Keeping here for reference. To be removed at the end of 2027.

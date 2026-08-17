@@ -80,13 +80,13 @@
 
 - name: SAP Patching - Validation - File Ownership - Stat availability of the path in the variable 'sap_patching_sapcar_path'
   ansible.builtin.stat:
-    path: "{{ sap_patching_sapcar_path }}"
+    path: "{{ __sap_patching_sapcar_path }}"
   register: __sap_patching_register_sapcar_path_stat
 
 - name: SAP Patching - Validation - File Ownership - Fail if path in the variable 'sap_patching_sapcar_path' does not exist as a directory
   ansible.builtin.fail:
     msg: |
-      FAIL: The path "{{ sap_patching_sapcar_path }}" does not exist or is not a directory.
+      FAIL: The path "{{ __sap_patching_sapcar_path }}" does not exist or is not a directory.
       Please ensure that the SAPCAR path is correct and accessible.
   when: not (__sap_patching_register_sapcar_path_stat.stat.exists
           and __sap_patching_register_sapcar_path_stat.stat.isdir)

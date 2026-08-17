@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Records the replication parameters of every site before the patching starts.
+# They are read from the primary site, which is the site with the lowest tier, and they are the only
+# source of the parameters required to register a site again after a cluster relocation broke its
+# replication, because a broken site cannot report them anymore.
+
+
+# The '--sapcontrol=1' output is a flat list of 'key=value' lines, so no output column has to be located with 'awk'.
+# Example of the output is in 'docs/command_outputs.md'.
+# This script does not return 0, the primary site with active replication returns 15.
+- name: SAP Patching - HDB Server - Apply - HSR Enabled - Get the initial system replication status of the primary site
+  ansible.builtin.shell:
+    cmd: >-
+      source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
+      HDBSettings.sh systemReplicationStatus.py --sapcontrol=1
+  args:
+    executable: /bin/bash
+  # 'last' returns the site with the lowest tier and 'first' returns its name.
+  delegate_to:
+    "{{ __sap_patching_fact_hdb_host_fqdn[__sap_patching_fact_hdb_hsr_site_to_host[__sap_patching_fact_hdb_hsr_sites | last | first]] }}"
+  become: true
+  become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+  register: __sap_patching_register_hdb_hsr_initial_status
+  retries: 3
+  delay: 20
+  until: __sap_patching_register_hdb_hsr_initial_status.rc == 15
+  changed_when: false
+  # Any other return code is a real error, e.g. the script was not found.
+  failed_when:
+    - __sap_patching_register_hdb_hsr_initial_status.rc < 10
+      or __sap_patching_register_hdb_hsr_initial_status.rc > 15
+
+# Lines which are not in the 'key=value' format, like 'SAPCONTROL-OK: <begin>', are dropped.
+# Example of a resulting key: 'service/hana1/39001/SITE_NAME'
+- name: SAP Patching - HDB Server - Apply - HSR Enabled - Set fact with the parsed initial system replication status
+  ansible.builtin.set_fact:
+    __sap_patching_fact_hdb_hsr_initial_status: >-
+      {{ dict(__sap_patching_register_hdb_hsr_initial_status.stdout_lines
+              | select('match', '^[a-z_]+[^ ]*=')
+              | map('split', '=', 1)) }}
+
+# Only the nameserver of each site is evaluated, because all services of a site are registered together.
+# The resulting fact is keyed by the site name, so that a site which has to be registered again after
+# the patching can look up its own parameters, for example:
+# {'DC01': {'remote_host': 'hana2', 'remote_instance': '90', 'replication_mode': 'SYNC', 'operation_mode': 'logreplay'}}
+# Reason for noqa: Jinja spacing would squash all lines to left, making it unreadable.
+- name: SAP Patching - HDB Server - Apply - HSR Enabled - Set fact with the initial replication parameters of each site  # noqa jinja[spacing]
+  ansible.builtin.set_fact:
+    __sap_patching_fact_hdb_hsr_initial_registration: >-
+      {% set pairs_list = [] %}
+      {%- for service in __nameserver_services -%}
+        {%- set key_pair = pairs_list.append({'key': __status[service ~ '/SITE_NAME'],
+              'value': {'remote_host': __status[service ~ '/SECONDARY_HOST'],
+                        'remote_instance': __status[service ~ '/SECONDARY_PORT'][1:3],
+                        'replication_mode': __status[service ~ '/REPLICATION_MODE'],
+                        'operation_mode': __status[service ~ '/OPERATION_MODE']}}) -%}
+      {%- endfor -%}
+      {{ pairs_list | items2dict }}
+  vars:
+    __status: "{{ __sap_patching_fact_hdb_hsr_initial_status }}"
+    # Keys of all nameserver services, for example 'service/hana1/39001'.
+    __nameserver_services: >-
+      {{ __status | dict2items
+         | selectattr('key', 'search', '/SERVICE_NAME$')
+         | selectattr('value', 'equalto', 'nameserver')
+         | map(attribute='key')
+         | map('regex_replace', '/SERVICE_NAME$', '')
+         | list }}

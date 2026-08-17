@@ -3,9 +3,7 @@
 
 # Shared task file for both ABAP Kernel and Web Dispatcher Kernel patching.
 
-# Reported once, because every host in play builds the identical list of hosts with the kernel installed.
-# Evaluating 'when' on the first host only is therefore safe, even though it is combined with 'run_once'.
-# This is only a warning, so that other plan steps (e.g. 'hdb_server_prepare') can still be executed.
+# Warning with 'run_once', because all hosts in the play have same fact set.
 - name: SAP Patching - Kernel - Prepare - Warning if the kernel is not installed on any host in play
   ansible.builtin.debug:
     msg: |
@@ -21,13 +19,14 @@
   when: __sap_patching_fact_kernel_hosts | length == 0
 
 
-- name: Block for base directory
-  # Only hosts where the kernel is installed prepare it, so a play may contain hosts of other roles.
+# Rules for preparation of directories:
+# - Base is created on all hosts, or primary host only in shared mode.
+# - Base and source are verified on all hosts, to ensure they are visible in shared mode.
+# - Retry stat after directory creation to absorb NFS propagation delay in shared mode.
+
+- name: Block for base directory only on hosts where the kernel is installed
   when: __sap_patching_fact_kernel_installed | d(false)
   block:
-    # Stat only on hosts that will create the directory (the primary in shared mode, or every host with a
-    # per-host staging area). Non-primary hosts skip this so they do not cache an NFS negative lookup,
-    # which is kept for up to 'acdirmax' and would hide the directory the primary is about to create.
     - name: SAP Patching - Kernel - Prepare - Stat availability of the base directory
       ansible.builtin.stat:
         path: "{{ __sap_patching_fact_kernel_base }}"
@@ -36,9 +35,7 @@
         - not __sap_patching_fact_kernel_files_shared
           or inventory_hostname == __sap_patching_fact_kernel_primary_host
 
-    # In shared mode only the primary host creates the directory, so a missing shared mount on another
-    # host is reported below instead of being masked by a local directory on the mount point.
-    - name: SAP Patching - Kernel - Prepare - Create base directory with user {{ __sap_patching_file_owner }}
+    - name: SAP Patching - Kernel - Prepare - Create base directory with user {{ __sap_patching_file_owner | d('') }}
       ansible.builtin.file:
         path: "{{ __sap_patching_fact_kernel_base }}"
         state: directory
@@ -50,8 +47,6 @@
           or inventory_hostname == __sap_patching_fact_kernel_primary_host
         - not __sap_patching_register_kernel_prepare_base_stat.stat.exists
 
-    # Verify the directory is visible on every host, retrying to absorb NFS propagation delay after the
-    # primary created it. 'failed_when: false' lets the dedicated task below report a helpful message.
     - name: SAP Patching - Kernel - Prepare - Verify availability of the base directory
       ansible.builtin.stat:
         path: "{{ __sap_patching_fact_kernel_base }}"
@@ -59,7 +54,7 @@
       until: __sap_patching_register_kernel_prepare_base_stat.stat.exists
       retries: 6
       delay: 5
-      failed_when: false
+      failed_when: false  # Fail is handled in the next task to provide more information.
 
     - name: SAP Patching - Kernel - Prepare - Fail if the base directory is not available on this host
       ansible.builtin.fail:
@@ -89,7 +84,7 @@
           {% endif %}
       when: not __sap_patching_register_kernel_prepare_base_stat.stat.isdir
 
-    - name: SAP Patching - Kernel - Prepare - Stat base directory with user {{ __sap_patching_file_owner }}
+    - name: SAP Patching - Kernel - Prepare - Stat base directory with user {{ __sap_patching_file_owner | d('') }}
       ansible.builtin.stat:
         path: "{{ __sap_patching_fact_kernel_base }}"
       register: __sap_patching_register_kernel_prepare_base_user_stat
@@ -114,12 +109,9 @@
       when: not __sap_patching_register_kernel_prepare_base_user_stat.stat.writeable
 
 
-- name: Block for source directory
+- name: Block for source directory only on hosts where the kernel is installed
   when: __sap_patching_fact_kernel_installed | d(false)
   block:
-    # Stat only on hosts that will create the directory (the primary in shared mode, or every host with a
-    # per-host staging area). Non-primary hosts skip this so they do not cache an NFS negative lookup,
-    # which is kept for up to 'acdirmax' and would hide the directory the primary is about to create.
     - name: SAP Patching - Kernel - Prepare - Stat availability of the source directory
       ansible.builtin.stat:
         path: "{{ __sap_patching_fact_kernel_source }}"
@@ -128,9 +120,7 @@
         - not __sap_patching_fact_kernel_files_shared
           or inventory_hostname == __sap_patching_fact_kernel_primary_host
 
-    # In shared mode only the primary host creates the directory, so a missing shared mount on another
-    # host is reported below instead of being masked by a local directory on the mount point.
-    - name: SAP Patching - Kernel - Prepare - Create source directory with user {{ __sap_patching_file_owner }}
+    - name: SAP Patching - Kernel - Prepare - Create source directory with user {{ __sap_patching_file_owner | d('') }}
       ansible.builtin.file:
         path: "{{ __sap_patching_fact_kernel_source }}"
         state: directory
@@ -142,8 +132,6 @@
           or inventory_hostname == __sap_patching_fact_kernel_primary_host
         - not __sap_patching_register_kernel_prepare_source_stat.stat.exists
 
-    # Verify the directory is visible on every host, retrying to absorb NFS propagation delay after the
-    # primary created it. 'failed_when: false' lets the dedicated task below report a helpful message.
     - name: SAP Patching - Kernel - Prepare - Verify availability of the source directory
       ansible.builtin.stat:
         path: "{{ __sap_patching_fact_kernel_source }}"
@@ -151,7 +139,7 @@
       until: __sap_patching_register_kernel_prepare_source_stat.stat.exists
       retries: 6
       delay: 5
-      failed_when: false
+      failed_when: false  # Fail is handled in the next task to provide more information.
 
     - name: SAP Patching - Kernel - Prepare - Fail if the source directory is not available on this host
       ansible.builtin.fail:
@@ -183,10 +171,8 @@
 
 
     # Copy to multiple targets can saturate the control node and the network.
-    # With a shared staging area the copy runs only on the elected primary host, because every host
-    # sees the same target directory. With a per-host staging area it runs on every installed host,
-    # and 'throttle' limits it to one copy at a time so the control node and network are not saturated.
-    # Set 'sap_patching_disable_throttle' to 'true' to copy to all hosts in parallel.
+    # Run on the elected primary host in shared mode, or on every host in per-host mode.
+    # Throttle comes into effect only in per-host mode, where every host copies its own source directory.
     - name: Block for local source directory
       throttle: "{{ 0 if sap_patching_disable_throttle | d(false) else 1 }}"
       when:
@@ -208,6 +194,30 @@
               Please ensure that the kernel source path is correct and accessible.
           when: not (__sap_patching_register_kernel_source_local_stat.stat.exists
                   and __sap_patching_register_kernel_source_local_stat.stat.isdir)
+
+        - name: SAP Patching - Kernel - Prepare - Inform about the copy from the control node
+          ansible.builtin.debug:
+            msg: |
+              INFO: Copying the kernel source files from the control node to the managed node "{{ inventory_hostname }}".
+              Source (control node): {{ __sap_patching_fact_kernel_source_local }}
+              Target (managed node): {{ __sap_patching_fact_kernel_source }}
+
+              {% if __sap_patching_fact_kernel_type == 'abap_kernel' %}
+              The files are copied because 'sap_patching_kernel_files_on_target' is 'false'.
+              {% else %}
+              The files are copied because 'sap_patching_webdisp_files_on_target' is 'false'.
+              {% endif %}
+              Set it to 'true' when the files are already present on the managed nodes.
+              {% if __sap_patching_fact_kernel_files_shared %}
+              The staging area is shared, so this copy runs only once,
+              on the primary host "{{ __sap_patching_fact_kernel_primary_host }}".
+              {% else %}
+              The staging area is not shared, so this copy runs on every host where the kernel is installed.
+              {% endif %}
+
+              NOTE: This task reports no progress and Ansible may seem unresponsive until the copy completes.
+              The duration depends on the size of the files and the network speed between the control node
+              and the managed node.
 
         - name: SAP Patching - Kernel - Prepare - Copy source files from control node to managed node
           ansible.builtin.copy:

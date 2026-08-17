@@ -6,15 +6,15 @@
 
 - name: SAP Patching - Kernel - Restart - Include tasks to get a list of sapstartsrv instances
   ansible.builtin.include_tasks:
-    file: "{{ role_path }}/tasks/startstop/sapstartsrv_instances.yml"
+    file: common/sapstartsrv_instances.yml
   vars:
     __sap_patching_fact_sidadm_user: "{{ sap_patching_sap_system_sid | lower }}adm"
 
 - name: SAP Patching - Kernel - Restart - Execute shared tasks for kernel restart
   ansible.builtin.include_tasks:
-    file: shared_kernel_restart.yml
+    file: common/shared_kernel_restart.yml
   vars:
-    __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid }}"
+    __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid | upper }}"
     __sap_patching_fact_sidadm_user: "{{ sap_patching_sap_system_sid | lower }}adm"
     __sap_patching_fact_kernel_restart_strategy: "{{ sap_patching_kernel_restart_strategy }}"
     __sap_patching_fact_kernel_type: "abap_kernel"

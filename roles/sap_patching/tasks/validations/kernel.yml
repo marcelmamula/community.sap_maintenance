@@ -79,7 +79,7 @@
       - sap_patching_kernel_prepare_version == 'autodetect' or sap_patching_kernel_prepare_version is match('^\d{3,4}$')
     fail_msg: |
       The variable 'sap_patching_kernel_prepare_version' is undefined or invalid.
-      It should be either 'autodetect' or a 3-digit kernel version number (e.g. '793').
+      It should be either 'autodetect' or a 3 or 4 digit kernel version number (e.g. '793').
 
 - name: SAP Patching - Validation - Kernel - Assert that the variable 'sap_patching_kernel_prepare_append_to_version' is defined as valid string
   ansible.builtin.assert:
@@ -120,15 +120,6 @@
     fail_msg: |
       The variable 'sap_patching_kernel_rks_soft_timeout' is undefined or invalid.
       It should be an integer (in seconds) indicating the soft timeout for the Rolling Kernel Switch.
-
-- name: SAP Patching - Validation - Kernel - Assert that the variable 'sap_patching_kernel_restart_strategy' is defined as valid string
-  ansible.builtin.assert:
-    that:
-      - sap_patching_kernel_restart_strategy is defined
-      - sap_patching_kernel_restart_strategy is string
-      - sap_patching_kernel_restart_strategy in ['bootstrap', 'all', 'rks']
-    fail_msg: |
-      FAIL: The variable 'sap_patching_kernel_restart_strategy' must be one of: 'bootstrap', 'all', 'rks'.
 
 
 - name: SAP Patching - Validation - Kernel - Set fact that validation was completed

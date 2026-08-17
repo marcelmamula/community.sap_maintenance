@@ -15,18 +15,63 @@
         - always
 
 
+    # Loop items are steps in the execution plan.
     - name: SAP Patching - Include task file for each step in the execution plan
       ansible.builtin.include_tasks:
         file: main_loop.yml
       loop: "{{ sap_patching_execution_plan }}"
       loop_control:
         loop_var: __sap_patching_step
-        label: "Executing step: {{ __sap_patching_step }}"
+        label: "Executing step: {{ __sap_patching_step | d('N/A') }}"
       when:
         - __sap_patching_exec_def is defined
         - __sap_patching_exec_def is mapping
         - __sap_patching_exec_def | length > 0
         - __sap_patching_exec_def[__sap_patching_step] is defined
         - __sap_patching_exec_def[__sap_patching_step].file is defined
+      tags:
+        - always
+
+
+    - name: SAP Patching - Show summary of the executed steps
+      ansible.builtin.debug:
+        msg: |
+          INFO: SAP patching has finished on hosts: {{ ansible_play_hosts | join(', ') }}
+          The following steps of the variable 'sap_patching_execution_plan' were executed in this order:
+          {% for step_item in sap_patching_execution_plan %}
+          - {{ step_item }}
+          {% endfor %}
+      # Execution plan is the same for all hosts in play, so the summary is shown only once.
+      run_once: true
+      tags:
+        - always
+
+  # Reported once, because the error of the failed task is reported by the task itself.
+  # A failed task with 'run_once' marks all hosts in play as failed,
+  # so the role does not end as rescued on any of them.
+  rescue:
+    - name: SAP Patching - Fail with the information about the state of the patching
+      run_once: true
+      ansible.builtin.fail:
+        msg: |
+          FAIL: SAP patching has failed and the execution was stopped on all hosts in play.
+
+          The remaining steps of the execution plan were not executed on any host in play.
+          Not every step is idempotent, so the reported error has to be investigated
+          and the system has to be checked before the role is executed again.
+          {% if __sap_patching_clustered_hosts | length > 0 %}
+
+          The cluster can be left in a state which the role does not clean up:
+          - The maintenance mode can still be enabled.
+          - The relocation of the SAP HANA clone resource can still be enforced by a location constraint.
+          {% endif %}
+      vars:
+        # The task is executed only on one host, so the cluster has to be checked on all hosts in play.
+        __sap_patching_clustered_hosts: >-
+          {{ ansible_play_hosts
+             | map('extract', hostvars)
+             | selectattr('sap_patching_hdb_server_is_clustered', 'defined')
+             | selectattr('sap_patching_hdb_server_is_clustered')
+             | list }}
       tags:
         - always

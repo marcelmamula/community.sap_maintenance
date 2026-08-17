@@ -59,8 +59,10 @@
   when: not sap_patching_host_agent_files_on_target
 
 
-- name: Block when update mode is auto
-  when: __sap_patching_exec_def[__sap_patching_step].vars.update_mode | d('') == 'auto'
+# Validators are executed only once for the whole plan, so the condition cannot depend on the
+# current step, which can be any of the steps sharing this validator.
+- name: Block when the execution plan contains the automatic update
+  when: "'host_agent_apply_auto' in sap_patching_execution_plan"
   block:
     - name: SAP Patching - Validation - Host Agent - Assert that the variable 'sap_patching_host_agent_autoupdate_path' is defined as valid string
       ansible.builtin.assert:

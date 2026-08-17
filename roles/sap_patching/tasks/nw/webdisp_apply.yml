@@ -2,7 +2,6 @@
 ---
 
 # Facts are set here for improved readability, instead of combining all this logic into one jinja2 block.
-
 # Prepare the path to kernel to apply, based on the following logic:
 # 1. If the prepare task was executed, use the prepared kernel path.
 # 2. If the user did not specify a kernel to apply, use the default symlink path.
@@ -35,7 +34,7 @@
 
 - name: SAP Patching - Web Dispatcher - Apply - Execute shared tasks for kernel apply
   ansible.builtin.include_tasks:
-    file: shared_kernel_apply.yml
+    file: common/shared_kernel_apply.yml
   vars:
     __sap_patching_fact_sap_system_sid: "{{ (sap_patching_wdp_system_sid | d(sap_patching_sap_system_sid)) | upper }}"
     __sap_patching_fact_sidadm_user: "{{ (sap_patching_wdp_system_sid | d(sap_patching_sap_system_sid)) | lower }}adm"
@@ -44,3 +43,18 @@
 
     # Every Web Dispatcher host has its own global exe directory, so all of them are patched.
     __sap_patching_fact_kernel_apply_once: false
+
+
+- name: SAP Patching - Web Dispatcher - Apply - Inform that the restart step is not part of the execution plan
+  ansible.builtin.debug:
+    msg: |
+      INFO: Step 'webdisp_apply' was completed, but the step 'webdisp_restart'
+      is not part of the current execution plan.
+      The Web Dispatcher files were copied to the global exe directory: {{ __sap_patching_fact_kernel_global_exe }}
+
+      The running Web Dispatcher instances keep using the previous kernel until they are restarted,
+      either by the step 'webdisp_restart' or manually during a maintenance window.
+  when:
+    - "'webdisp_restart' not in sap_patching_execution_plan"
+    - __sap_patching_fact_kernel_installed | d(false)
+    - inventory_hostname == __sap_patching_fact_kernel_primary_host

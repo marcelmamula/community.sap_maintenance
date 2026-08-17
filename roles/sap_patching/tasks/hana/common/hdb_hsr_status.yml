@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# Reusable wait for the SAP HANA System Replication to become active, included from multiple places.
+# The script reports the state of all services with its return code, so no output parsing is needed.
+#
+# Input variables, set with 'vars' of the including task, so that they are gone after the include:
+#   __sap_patching_hsr_status_host    - host on which the status is read, defaults to the current host
+#   __sap_patching_hsr_status_ok_rc   - accepted return codes, defaults to 12 (not primary) and 15 (active)
+#   __sap_patching_hsr_status_retries - number of attempts before the status is considered final, defaults to 30
+#   __sap_patching_hsr_status_delay   - delay in seconds between the attempts, defaults to 20
+
+
+# This script does not return 0, the following return codes are expected:
+# NoHSR = 10, Error = 11, Unknown = 12, Initializing = 13, Syncing = 14, Active = 15
+- name: SAP Patching - HDB Server - HSR - Get the system replication status
+  ansible.builtin.shell:
+    cmd: >-
+      source /usr/sap/{{ __sap_patching_fact_hdb_server_sid }}/home/.sapenv.sh &&
+      HDBSettings.sh systemReplicationStatus.py
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ __sap_patching_hsr_status_host | d(inventory_hostname) }}"
+  become: true
+  become_user: "{{ __sap_patching_fact_hdb_server_sidadm_user }}"
+  register: __sap_patching_register_hdb_hsr_status
+
+  retries: "{{ __sap_patching_hsr_status_retries | d(30) }}"
+  delay: "{{ __sap_patching_hsr_status_delay | d(20) }}"
+  # A site which is still initializing (13) or syncing (14) is retried until the replication is active (15).
+  until: __sap_patching_register_hdb_hsr_status.rc in __sap_patching_hsr_status_ok_rc | d([12, 15])
+
+  changed_when: false
+  # Any other return code is a real error, e.g. the script was not found.
+  failed_when:
+    - __sap_patching_register_hdb_hsr_status.rc < 10
+      or __sap_patching_register_hdb_hsr_status.rc > 15
