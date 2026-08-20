@@ -10,9 +10,11 @@
   run_once: true
 
 
+# The path must be absolute, because a relative include is searched in the playbook directory as well,
+# where a playbook named after the validator (e.g. 'hdb_client.yml') would be included instead.
 - name: SAP Patching - Validation - Include validation task file for step '{{ __sap_patching_step | d('') }}'
   ansible.builtin.include_tasks:
-    file: "{{ validation_item }}.yml"
+    file: "{{ role_path }}/tasks/validations/{{ validation_item }}.yml"
   loop: "{{ __sap_patching_exec_def[__sap_patching_step].validators }}"
   loop_control:
     loop_var: validation_item

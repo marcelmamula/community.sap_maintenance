@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 
-- name: SAP Patching - Stop ABAP - Set fact with SID variable if required
+- name: SAP Patching - Stop ABAP - Set facts with SID variables if required
   ansible.builtin.set_fact:
     __sap_patching_fact_sap_system_sid: "{{ sap_patching_sap_system_sid }}"
+    __sap_patching_fact_sidadm_user: "{{ sap_patching_sap_system_sid | lower }}adm"
   when:
     - __sap_patching_fact_sap_system_sid | d('', true) | length == 0
       or __sap_patching_params.task_execution_mode | d('', true) == 'direct'
@@ -16,7 +17,7 @@
 # Instance list is already verified before this file is executed,
 # so we can be sure that there is at least one instance to execute the stop on.
 
-- name: Block to stop the system and wait until all instances are down
+- name: Block to stop the system
   # StopSystem must be executed from one host only, elected in 'sapstartsrv_instances.yml'.
   when: inventory_hostname == __sap_patching_fact_instance_primary_host
   block:
@@ -49,47 +50,70 @@
           or 'FAIL' in __sap_patching_register_stop_system.stdout | d('')
 
 
-    - name: SAP Patching - Stop ABAP - Execute 'sapcontrol' with function 'WaitforStopped' to wait until the system is stopped
+- name: SAP Patching - Stop ABAP - Inform about the wait for the stopped instances
+  ansible.builtin.debug:
+    msg: |
+      INFO: The whole system was stopped with a single command from the host '{{ __sap_patching_fact_instance_primary_host }}'.
+      Waiting until all instances on the following hosts in play are stopped: {{ __sap_patching_fact_instance_hosts | join(', ') }}.
+  # Shown once from the elected primary host, the same host that initiates the system wide commands.
+  when: inventory_hostname == __sap_patching_fact_instance_primary_host
+
+
+# The function 'WaitforStopped' waits only for the instance it is executed on,
+# so every host waits for all of its own instances to ensure that the whole system is stopped.
+- name: Block to wait until all instances are down
+  when: __sap_patching_fact_instance_list | d([]) | length > 0
+  block:
+
+    - name: SAP Patching - Stop ABAP - Execute 'sapcontrol' with function 'WaitforStopped' to wait until the instances are stopped
       ansible.builtin.shell:
         cmd: >-
           source ~/.profile &&
           sapcontrol
-          -nr {{ __sap_patching_fact_instance_list[0][1] }}
+          -nr {{ instance_item[1] }}
           -function WaitforStopped 600 10
       args:
         executable: /bin/bash
       become: true
       become_user: "{{ __sap_patching_fact_sidadm_user }}"
+      loop: "{{ __sap_patching_fact_instance_list }}"
+      loop_control:
+        loop_var: instance_item
+        label: "Waiting for instance: {{ instance_item[0] }}{{ instance_item[1] }}"
       register: __sap_patching_register_stop_system_wait
-      changed_when: __sap_patching_register_stop_system_wait.rc == 0
+      changed_when: false  # The command only waits for the state reached by 'StopSystem'.
       failed_when: false  # Fail is handled in the next task, to report the command output.
 
     - name: SAP Patching - Stop ABAP - Fail if 'sapcontrol' with function 'WaitforStopped' has failed
       ansible.builtin.fail:
         msg: |
           FAIL: The command 'sapcontrol' with function 'WaitforStopped' has failed for current kernel.
-          Command: {{ __sap_patching_register_stop_system_wait.cmd | d('') }}
-          Output: {{ __sap_patching_register_stop_system_wait.stdout | d('') }}
-          Error: {{ __sap_patching_register_stop_system_wait.stderr | d('') }}
+          Command: {{ wait_item.cmd | d('') }}
+          Output: {{ wait_item.stdout | d('') }}
+          Error: {{ wait_item.stderr | d('') }}
+      loop: "{{ __sap_patching_register_stop_system_wait.results | d([]) }}"
+      loop_control:
+        loop_var: wait_item
+        label: "Instance: {{ wait_item.instance_item[0] | d('') }}{{ wait_item.instance_item[1] | d('') }}"
       when:
-        - __sap_patching_register_stop_system_wait.rc | d(1) != 0
-          or 'FAIL' in __sap_patching_register_stop_system_wait.stdout | d('')
+        - wait_item.rc | d(1) != 0
+          or 'FAIL' in wait_item.stdout | d('')
 
 
-    # This code has been superseded. Keeping here for reference. To be removed at the end of 2027.
-    # # This is a bit crude, but safest to make sure we continue only if the whole system is down
-    # # Grabbing the first instance number from the list as any instance can see all others
-    # - name: Wait until all instances are not GREEN
-    #   ansible.builtin.shell: |
-    #     source ~/.profile && sapcontrol -nr {{ __sap_patching_fact_instance_list[0][1] }}
-    #     -format script -function GetSystemInstanceList |  grep 'dispstatus:\|FAIL'
-    #   args:
-    #     executable: /bin/bash
-    #   become: true
-    #   become_user: "{{ __sap_patching_fact_sap_system_sid | lower }}adm"
-    #   register: __sap_patching_register_instances_check_stopped
-    #   until: "'GREEN' not in __sap_patching_register_instances_check_stopped.stdout"
-    #   retries: 30
-    #   delay: 20
-    #   failed_when: "'FAIL' in __sap_patching_register_instances_check_stopped.stdout"
-    #   changed_when: false
+# This code has been superseded. Keeping here for reference. To be removed at the end of 2027.
+# # This is a bit crude, but safest to make sure we continue only if the whole system is down
+# # Grabbing the first instance number from the list as any instance can see all others
+# - name: Wait until all instances are not GREEN
+#   ansible.builtin.shell: |
+#     source ~/.profile && sapcontrol -nr {{ __sap_patching_fact_instance_list[0][1] }}
+#     -format script -function GetSystemInstanceList |  grep 'dispstatus:\|FAIL'
+#   args:
+#     executable: /bin/bash
+#   become: true
+#   become_user: "{{ __sap_patching_fact_sap_system_sid | lower }}adm"
+#   register: __sap_patching_register_instances_check_stopped
+#   until: "'GREEN' not in __sap_patching_register_instances_check_stopped.stdout"
+#   retries: 30
+#   delay: 20
+#   failed_when: "'FAIL' in __sap_patching_register_instances_check_stopped.stdout"
+#   changed_when: false

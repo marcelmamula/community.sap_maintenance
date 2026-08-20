@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+
+# SAPCAR is used by every step extracting SAR files, so it is copied from the control node
+# once for the whole play, before the first step of the execution plan is executed.
+
+- name: SAP Patching - SAPCAR - Stat availability of the SAPCAR file on the control node
+  ansible.builtin.stat:
+    path: "{{ __sap_patching_sapcar_path_local }}/{{ sap_patching_sapcar_file_name }}"
+  delegate_to: localhost  # Stat should be executed on control node where the file is located
+  run_once: true  # The file is the same for all hosts in play.
+  register: __sap_patching_register_sapcar_local_stat
+
+- name: SAP Patching - SAPCAR - Fail if the SAPCAR file does not exist on the control node
+  ansible.builtin.fail:
+    msg: |
+      FAIL: The file "{{ __sap_patching_sapcar_path_local }}/{{ sap_patching_sapcar_file_name }}"
+      does not exist on the control node.
+      Please ensure that the variables 'sap_patching_sapcar_path_local' and 'sap_patching_sapcar_file_name' are correct,
+      or set 'sap_patching_sapcar_on_target' to 'true' when SAPCAR is already present on the managed nodes.
+  when: not __sap_patching_register_sapcar_local_stat.stat.exists
+  run_once: true
+
+
+- name: SAP Patching - SAPCAR - Create the SAPCAR directory with user {{ __sap_patching_file_owner | d('') }}
+  ansible.builtin.file:
+    path: "{{ __sap_patching_sapcar_path }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ __sap_patching_file_owner }}"
+    group: "{{ sap_patching_file_group }}"
+
+- name: SAP Patching - SAPCAR - Inform about the copy from the control node
+  ansible.builtin.debug:
+    msg: |
+      INFO: Copying the SAPCAR executable from the control node to all hosts in play.
+      Source (control node): {{ __sap_patching_sapcar_path_local }}/{{ sap_patching_sapcar_file_name }}
+      Target (managed node): {{ __sap_patching_sapcar_path }}/{{ sap_patching_sapcar_file_name }}
+
+      The file is copied because 'sap_patching_sapcar_on_target' is 'false'.
+      Set it to 'true' when SAPCAR is already present on the managed nodes.
+  run_once: true
+
+# Copy to multiple targets can saturate the control node and the network.
+# Throttle also serializes the copy when the SAPCAR directory is on a shared filesystem.
+- name: SAP Patching - SAPCAR - Copy the SAPCAR file from the control node to the managed node
+  ansible.builtin.copy:
+    src: "{{ __sap_patching_sapcar_path_local }}/{{ sap_patching_sapcar_file_name }}"
+    dest: "{{ __sap_patching_sapcar_path }}/{{ sap_patching_sapcar_file_name }}"
+    remote_src: false  # Copy from control node
+    mode: '0755'
+    owner: "{{ __sap_patching_file_owner }}"
+    group: "{{ sap_patching_file_group }}"
+  throttle: "{{ 0 if sap_patching_disable_throttle | d(false) else 1 }}"

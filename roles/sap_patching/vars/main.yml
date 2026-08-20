@@ -206,6 +206,28 @@ __sap_patching_host_agent_source_local: "{{ sap_patching_host_agent_source_local
 __sap_patching_host_agent_base: "{{ sap_patching_host_agent_base | regex_replace('\\/$', '') }}"
 
 __sap_patching_sapcar_path: "{{ sap_patching_sapcar_path | regex_replace('\\/$', '') }}"
+__sap_patching_sapcar_path_local: "{{ sap_patching_sapcar_path_local | regex_replace('\\/$', '') }}"
+
+# Steps extracting SAR files with SAPCAR, so the executable has to be available before they are executed.
+# Every step of this list must be part of '__sap_patching_file_owning_steps' as well,
+# because the copy of SAPCAR is executed from 'validations/file_ownership.yml',
+# which is included only when the execution plan contains a step from that list.
+__sap_patching_sapcar_steps:
+  - abap_kernel_prepare
+  - webdisp_prepare
+  - hdb_client_prepare
+  - hdb_server_prepare
+  - host_agent_prepare
+
+# Steps creating files in the staging area, which have to be owned by the patching user.
+__sap_patching_file_owning_steps:
+  - abap_kernel_prepare
+  - webdisp_prepare
+  - hdb_client_prepare
+  - hdb_server_prepare
+  - host_agent_prepare
+  # Auto mode is writing '.upgrading' file and needs to be owned by the patching user.
+  - host_agent_apply_auto
 
 
 # Cluster commands of the supported cluster shells, selected by the OS family of the managed node.

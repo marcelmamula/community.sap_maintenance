@@ -7,7 +7,7 @@
 # Available options:
 # - Kernel: abap_kernel_prepare, abap_kernel_apply, abap_kernel_restart
 # - HDB Client: hdb_client_prepare, hdb_client_apply
-# - HDB Server: hdb_server_prepare, hdb_server_apply, hdb_server_update_prepare, hdb_server_update_resume
+# - HDB Server: hdb_server_prepare, hdb_server_apply, hdb_server_update_prepare, hdb_server_update_resume (Not implemented yet)
 # - Host Agent: host_agent_prepare, host_agent_apply_auto, host_agent_apply_manual
 # - Web Dispatcher: webdisp_prepare, webdisp_apply, webdisp_restart
 # - ABAP Start Stop: abap_stop_system, abap_start_system
@@ -18,11 +18,20 @@ sap_patching_execution_plan: []
 # NOTE: In case of using database with different SID, use 'sap_patching_hdb_system_sid' to define HANA SID.
 sap_patching_sap_system_sid: ''
 
-# The path to directory where SAPCAR executable is located (String).
+# The path to directory where SAPCAR executable is located on managed nodes (String).
+# When 'sap_patching_sapcar_on_target' is 'false', the executable is copied to this path.
 sap_patching_sapcar_path: "/install"
 
 # The name of the SAPCAR executable file (String).
 sap_patching_sapcar_file_name: SAPCAR.EXE
+
+# Whether the SAPCAR executable is already present on the managed nodes (Boolean).
+# When set to 'false', it is copied from the control node before the execution plan is executed.
+sap_patching_sapcar_on_target: true
+
+# The path to directory where the SAPCAR executable is located on the control node (String).
+# Used when 'sap_patching_sapcar_on_target' is set to 'false'.
+sap_patching_sapcar_path_local: ''  # e.g. /mnt/c/sap_software/sapcar
 
 # The name of operating system user which owns all extracted files (String).
 # Defaults to an empty string, which means that the user is derived as '<sap_patching_sap_system_sid>adm'.
