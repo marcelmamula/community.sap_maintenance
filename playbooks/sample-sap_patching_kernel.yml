@@ -1,74 +1,91 @@
 ---
-# Basic kernel update example using rolling kernel switch (RKS)
-# This will run all three abap kernel steps
-# abap_kernel_prepare
-#  It will look in {{ sap_patching_kernel_source }} for all kernel related SAR files and use {{ sap_patching_sapcar_path }}/{{ sap_patching_sapcar_file_name }}
-#  to unpack all the files into {{ sap_patching_kernel_base }}/<kernel_version>/extracted before applying the patch.
-#  It will autodetect the kernel version that was provided in {{ sap_patching_kernel_source }} and set {{ sap_patching_kernel_to_apply }}
-# abap_kernel_apply
-#  It will apply the kernel that was prepared in the previous step i.e. copy it to the global SYS/exe/run directory
-# abap_kernel_restart
-#  strategy=RKS - This will update sapuxuserchk files and restart the system using rolling kernel switch
-# abap_kernel_saproot
-#  If RKS is used, saproot should be executed separately at a later stage AFTER all instances have restarted
+# Sample plays for ABAP kernel patching with the Ansible Role sap_patching.
+# See the role README for the description of the steps and the variables.
+#
+# The inventory groups 'p4h', 'q4h', 's4h' and 'd4h' are examples of one group per SAP system.
+# Replace them with the group of the system which is patched.
 
-- name: Basic kernel update using the lastest downloaded version and rolling kernel switch
-  hosts: all
+# Prepare the latest kernel from the source directory, apply it and restart with a Rolling Kernel Switch.
+# NOTE: With the 'rks' strategy 'saproot.sh' is not executed by the role and has to be
+#       executed manually after all instances have been restarted.
+- name: Ansible Play for ABAP kernel patching - Latest kernel with Rolling Kernel Switch
+  hosts: p4h
   become: true
   any_errors_fatal: true
-  vars:
-    sap_patching_sapcar_path: /install
-    sap_patching_sapcar_file_name: SAPCAR.EXE
-    sap_patching_sap_system_sid: S4H
-    sap_patching_execution_plan:
-      - abap_kernel_prepare
-      - abap_kernel_apply
-      - abap_kernel_restart
-      #- abap_kernel_saproot   #Run me later
-    sap_patching_kernel_prepare_version: autodetect
-    sap_patching_kernel_base: /install/kernel
-    sap_patching_kernel_source: /install/kernel/source
-    sap_patching_kernel_restart_strategy: rks
-  roles:
-    - sap_patching
+  tasks:
+    - name: Execute Ansible Role sap_patching
+      ansible.builtin.include_role:
+        name: sap_patching
+      vars:
+        sap_patching_sapcar_path: /install
+        sap_patching_sapcar_file_name: SAPCAR.EXE
+        sap_patching_sap_system_sid: P4H
+        sap_patching_execution_plan:
+          - abap_kernel_prepare
+          - abap_kernel_apply
+          - abap_kernel_restart
+        sap_patching_kernel_prepare_version: autodetect
+        sap_patching_kernel_base: /install/kernel
+        sap_patching_kernel_source: /install/kernel/source
+        sap_patching_kernel_restart_strategy: rks
 
 
-# This will update to a specific (already prepared) kernel version (7.93 patch 330) and restart the whole system at the end
-# abap_kernel_apply
-#  It will expand {{ sap_patching_kernel_to_apply }} to the full path i.e. {{ sap_patching_kernel_base }}/{{ sap_patching_kernel_to_apply }}/extracted
-#  and then apply the kernel i.e. copy it to the global SYS/exe/run directory
-# abap_kernel_restart
-#  strategy=all - This will update sapuxuserchk, restart the whole system including bootstrapping sapstartsrv and then it will run saproot.sh
-- name: Update to already prepared specific version and restart the whole system at the end
-  hosts: all
+# Apply kernel 7.93 patch 330, which was prepared by an earlier run, and restart the whole system.
+- name: Ansible Play for ABAP kernel patching - Already prepared kernel with full restart
+  hosts: q4h
   become: true
-  vars:
-    sap_patching_sap_system_sid: S4H
-    sap_patching_execution_plan:
-      - abap_kernel_apply
-      - abap_kernel_restart
-    sap_patching_kernel_base: /install/kernel
-    sap_patching_kernel_source: /install/kernel/source
-    sap_patching_kernel_restart_strategy: all
-    sap_patching_kernel_to_apply: k793p330
-  roles:
-    - sap_patching
+  any_errors_fatal: true
+  tasks:
+    - name: Execute Ansible Role sap_patching
+      ansible.builtin.include_role:
+        name: sap_patching
+      vars:
+        sap_patching_sap_system_sid: Q4H
+        sap_patching_execution_plan:
+          - abap_kernel_apply
+          - abap_kernel_restart
+        sap_patching_kernel_base: /install/kernel
+        sap_patching_kernel_source: /install/kernel/source
+        sap_patching_kernel_restart_strategy: all
+        sap_patching_kernel_to_apply: k793p330
 
 
-# This will add additional patches to an already prepared kernel without changing  the patch level e.g.
-# abap_kernel_prepare was used to prepare kernel 793p330, but you need to add a never version of R3trans and tp.
-# This doesn't change the kernel patch level, but adds newer version of certain components to it.
-# This shouldn't be used to update disp+work or SAPEXE/SAPEXEDB as that will create a new patch level.
-# Obviously the prepare can be combined with apply and restart steps if required, they are just omitted for make the example simpler.
-- name: Add new patches to already prepared kernel without changing the patch level
-  hosts: all
+# Add files like R3trans or tp on top of the already prepared kernel 793p330, without changing its patch level.
+# The apply and restart steps are omitted to keep the example short, they can be added to the plan.
+- name: Ansible Play for ABAP kernel patching - Append files to a prepared kernel
+  hosts: s4h
   become: true
-  vars:
-    sap_patching_sap_system_sid: S4H
-    sap_patching_execution_plan:
-      - abap_kernel_prepare
-    sap_patching_kernel_base: /install/kernel
-    sap_patching_kernel_source: /install/kernel/source
-    sap_patching_kernel_prepare_appendto_version: 793p330
-  roles:
-    - sap_patching
+  any_errors_fatal: true
+  tasks:
+    - name: Execute Ansible Role sap_patching
+      ansible.builtin.include_role:
+        name: sap_patching
+      vars:
+        sap_patching_sap_system_sid: S4H
+        sap_patching_execution_plan:
+          - abap_kernel_prepare
+        sap_patching_kernel_base: /install/kernel
+        sap_patching_kernel_source: /install/kernel/source
+        sap_patching_kernel_prepare_append_to_version: 793p330
+
+
+# Prepare the kernel on a system without a shared staging filesystem.
+# The SAR files are copied from '/software/kernel/source' on the control node to
+# 'sap_patching_kernel_source' on every host and they are extracted on every host separately.
+- name: Ansible Play for ABAP kernel patching - Prepare from the control node without a shared filesystem
+  hosts: d4h
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Execute Ansible Role sap_patching
+      ansible.builtin.include_role:
+        name: sap_patching
+      vars:
+        sap_patching_sap_system_sid: D4H
+        sap_patching_execution_plan:
+          - abap_kernel_prepare
+        sap_patching_kernel_base: /install/kernel
+        sap_patching_kernel_source: /install/kernel/source
+        sap_patching_kernel_source_local: /software/kernel/source
+        sap_patching_kernel_files_on_target: false
+        sap_patching_kernel_files_shared: false

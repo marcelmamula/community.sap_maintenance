@@ -1,57 +1,97 @@
 ---
-# This example will update ALL components - kernel, web disp, host agent, HDB client and HDB server
-# The execution plan includes stop/start steps where required.
-# For detailed explanation of each step please refer to the role documentation and to the other sample playbooks provided.
-# In this example each component has it's own source directory where the SAR files are expected to be present.
+# Sample play for patching all components of one SAP system with the Ansible Role sap_patching.
+# See the role README for the description of the steps and the variables.
 #
-# Important: when combining multiple patching activities that require system restarts set the ABAP kernel restart strategy to 'bootstrap'
-# to avoid multiple restarts during the combined patching process.
+# The inventory group 's4h' is an example of one group per SAP system.
+# Replace it with the group of the system which is patched.
 #
-# This plan will either prepare new versions of all components first - if they are present in the source directories
-# OR it will use already prepared versions based on the symlinks "ansible_to_apply" created during the prepare steps
-# (whether they were ran just now or sometimes in the past or created manually).
+# DISCLAIMER: This is the most complex way to use this role and it is not a starting point.
+# Use the per component sample playbooks first and combine their steps into one plan only after
+# each component was patched successfully on a sandbox system. In particular:
+#
+# - The steps are not idempotent. When the play fails, the state of the system has to be checked
+#   and corrected manually, because a new run starts the plan again from its first step.
+#   A failed run can leave the ABAP system stopped, or the components patched to different levels.
+# - All components are patched in one run, so all of them are affected by a failure of any of them.
+#   Splitting the plan into several plays keeps the impact of a failure to one component.
+# - The staging files of the whole run are owned by a single user, so 'sap_patching_file_owner'
+#   is set explicitly here, because the ABAP system and the HANA database use different SIDs.
+# - The kernel restart strategy is 'bootstrap', so 'abap_kernel_restart' stops and bootstraps the
+#   instances without starting them again, and 'abap_start_system' starts the system at the end
+#   of the plan. This keeps the whole run within a single downtime.
 
-- name: Update all supported components, stopping/starting the ABAP system only once as required
-  hosts: all
+- name: Ansible Play for SAP patching - All components of one SAP system
+  hosts: s4h
   become: true
   any_errors_fatal: true
-  vars:
-    sap_patching_sapcar_path: /install
-    sap_patching_sapcar_file_name: SAPCAR.EXE
-    sap_patching_sap_system_sid: S4H
-    sap_patching_wdp_system_sid: WDP
-    sap_patching_hdb_system_sid: HDB
-    sap_patching_execution_plan:
-    # Let's prepare all files first
-      - abap_kernel_prepare
-      - hdb_client_prepare
-      - hdb_server_prepare
-      - host_agent_prepare
-      - webdisp_prepare
-    # Host agent can be applied without stopping the system
-      - host_agent_apply_auto
-    # Web disp can be done next - requires web disp restart only
-      - webdisp_apply
-      - webdisp_restart
-    # Now apply the rest - stopping the ABAP system first
-      - abap_stop_system
-      - hdb_client_apply
-      - hdb_server_apply
-      - abap_kernel_apply
-      - abap_kernel_restart
-      - abap_start_system
-    sap_patching_kernel_restart_strategy: bootstrap   #IMPORTANT: use 'bootstrap' to avoid multiple system restarts during combined patching
-    sap_patching_kernel_prepare_version: autodetect
-    sap_patching_kernel_base: /install/kernel
-    sap_patching_kernel_source: "{{ sap_patching_kernel_base }}/source"
-    sap_patching_hdb_client_base: /install/hanadb/client
-    sap_patching_hdb_client_source: "{{ sap_patching_hdb_client_base }}/source"
-    sap_patching_hdb_server_base: /install/hanadb/server
-    sap_patching_hdb_server_source: "{{ sap_patching_hdb_server_base }}/source"
-    sap_patching_host_agent_base: /install/hostagents
-    sap_patching_host_agent_source: "{{ sap_patching_host_agent_base }}/source"
-    sap_patching_host_agent_autoupdate_path: /install/HostAgentUpdateDir
-    sap_patching_webdisp_base: /install/webdisp
-    sap_patching_webdisp_source: "{{ sap_patching_webdisp_base }}/source"
-  roles:
-    - sap_patching
+  tasks:
+    - name: Execute Ansible Role sap_patching
+      ansible.builtin.include_role:
+        name: sap_patching
+      vars:
+        # General settings
+        sap_patching_sap_system_sid: S4H
+        sap_patching_hdb_system_sid: HDB
+        sap_patching_wdp_system_sid: WDP
+        sap_patching_sapcar_path: /install
+        sap_patching_sapcar_file_name: SAPCAR.EXE
+        # The owner of the staging files must exist on every host in the play.
+        sap_patching_file_owner: s4hadm
+        sap_patching_file_group: sapsys
+
+        # ABAP kernel
+        sap_patching_kernel_base: /install/kernel
+        sap_patching_kernel_source: /install/kernel/source
+        sap_patching_kernel_files_on_target: true
+        sap_patching_kernel_files_shared: true
+        sap_patching_kernel_prepare_version: autodetect
+        sap_patching_kernel_restart_strategy: bootstrap
+
+        # HANA database client
+        sap_patching_hdb_client_base: /install/hanadb/client
+        sap_patching_hdb_client_source: /install/hanadb/client/source
+        sap_patching_hdb_client_files_on_target: true
+        sap_patching_hdb_client_files_shared: true
+        sap_patching_hdb_client_install_path: /usr/sap/S4H/hdbclient
+
+        # HANA database server
+        sap_patching_hdb_server_base: /install/hanadb/server
+        sap_patching_hdb_server_source: /install/hanadb/server/source
+        sap_patching_hdb_server_files_on_target: true
+        sap_patching_hdb_server_files_shared: true
+        sap_patching_hdb_server_activate_system_user: true
+        sap_patching_hdb_server_activate_admin_userstore_key: HDB_SYSTEMDB
+        sap_patching_hdb_server_is_clustered: false
+
+        # SAP Host Agent
+        sap_patching_host_agent_base: /install/hostagents
+        sap_patching_host_agent_source: /install/hostagents/source
+        sap_patching_host_agent_files_on_target: true
+        sap_patching_host_agent_files_shared: true
+        sap_patching_host_agent_autoupdate_path: /install/HostAgentUpdateDir
+
+        # SAP Web Dispatcher
+        sap_patching_webdisp_base: /install/webdisp
+        sap_patching_webdisp_source: /install/webdisp/source
+        sap_patching_webdisp_files_on_target: true
+        sap_patching_webdisp_files_shared: true
+
+        sap_patching_execution_plan:
+          # Prepare the files of all components
+          - abap_kernel_prepare
+          - hdb_client_prepare
+          - hdb_server_prepare
+          - host_agent_prepare
+          - webdisp_prepare
+          # The host agent is updated while the system is running
+          - host_agent_apply_auto
+          # The Web Dispatcher restarts only its own instances
+          - webdisp_apply
+          - webdisp_restart
+          # The remaining components need the ABAP system to be stopped
+          - abap_stop_system
+          - hdb_client_apply
+          - hdb_server_apply
+          - abap_kernel_apply
+          - abap_kernel_restart
+          - abap_start_system
